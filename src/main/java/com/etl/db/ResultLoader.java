@@ -214,6 +214,106 @@ public static void loadQ2(long runtime) throws Exception {
     System.out.println("Q2 loaded into DB successfully.");
     System.out.println("Total inserted rows: " + totalInserted);
 }
+public static void loadQ3(long runtime) throws Exception {
+
+    // -------- Load DB Config --------
+    Properties props = new Properties();
+    props.load(new FileInputStream("config/db.properties"));
+
+    String url = props.getProperty("db.url");
+    String user = props.getProperty("db.user");
+    String password = props.getProperty("db.password");
+
+    Connection conn = DriverManager.getConnection(url, user, password);
+
+    // -------- HDFS Setup --------
+    Configuration conf = new Configuration();
+    FileSystem fs = FileSystem.get(conf);
+
+    Path path = new Path("/etl/output/mapreduce/q3/part-r-00000");
+
+    BufferedReader br = new BufferedReader(
+            new InputStreamReader(fs.open(path))
+    );
+
+    // -------- Prepare Statement --------
+    PreparedStatement ps = conn.prepareStatement(
+        "INSERT INTO results (" +
+        "pipeline_name, query_name, run_id, batch_id, " +
+        "log_date, log_hour, total_requests, error_rate, runtime_ms" +
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    );
+
+    int batchId = 1;
+    int countInBatch = 0;
+    int batchSize = 100;
+    int totalInserted = 0;
+
+    String line;
+
+    while ((line = br.readLine()) != null) {
+
+        try {
+            // split into 2 parts safely
+            String[] parts = line.trim().split("\\s+", 2);
+            if (parts.length < 2) continue;
+
+            String key = parts[0];         // date_hour
+            String value = parts[1];       // total_errorRate
+
+            String[] keyParts = key.split("_");
+            if (keyParts.length < 2) continue;
+
+            String date = keyParts[0];
+            int hour = Integer.parseInt(keyParts[1]);
+
+            String[] valParts = value.split("_");
+            if (valParts.length < 2) continue;
+
+            int totalRequests = Integer.parseInt(valParts[0]);
+            double errorRate = Double.parseDouble(valParts[1]);
+
+            // -------- Set Values --------
+            ps.setString(1, "mapreduce");
+            ps.setString(2, "Q3");
+            ps.setInt(3, 1);
+            ps.setInt(4, batchId);
+
+            ps.setString(5, date);
+            ps.setInt(6, hour);
+            ps.setInt(7, totalRequests);
+            ps.setDouble(8, errorRate);
+
+            ps.setLong(9, runtime);
+
+            ps.addBatch();
+
+            countInBatch++;
+            totalInserted++;
+
+            if (countInBatch == batchSize) {
+                ps.executeBatch();
+                batchId++;
+                countInBatch = 0;
+            }
+
+        } catch (Exception e) {
+            // skip bad lines
+        }
+    }
+
+    if (countInBatch > 0) {
+        ps.executeBatch();
+    }
+
+    br.close();
+    fs.close();
+    ps.close();
+    conn.close();
+
+    System.out.println("Q3 loaded into DB successfully.");
+    System.out.println("Total inserted rows: " + totalInserted);
+}
     public static void main(String[] args) throws Exception {
 
     if (args.length == 0) {

@@ -14,9 +14,25 @@ public void runQ1() throws Exception {
     long start = System.currentTimeMillis();
 
     // delete old output
-    Runtime.getRuntime().exec("hdfs dfs -rm -r /etl/output/mapreduce/q1");
+   ProcessBuilder deletePB = new ProcessBuilder(
+        "hdfs", "dfs", "-rm", "-r", "/etl/output/mapreduce/q1"
+);
 
-    // 🔥 Run MapReduce properly
+deletePB.redirectErrorStream(true);
+Process deleteProcess = deletePB.start();
+
+BufferedReader delReader = new BufferedReader(
+        new InputStreamReader(deleteProcess.getInputStream())
+);
+
+String delLine;
+while ((delLine = delReader.readLine()) != null) {
+    System.out.println(delLine);
+}
+
+deleteProcess.waitFor();
+
+    
     ProcessBuilder pb = new ProcessBuilder(
             "hadoop", "jar",
             "scripts/mapreduce/q1.jar",
@@ -28,7 +44,7 @@ public void runQ1() throws Exception {
     pb.redirectErrorStream(true);
     Process p = pb.start();
 
-    // 🔥 print logs
+  
     BufferedReader reader = new BufferedReader(
             new InputStreamReader(p.getInputStream())
     );
@@ -39,6 +55,9 @@ public void runQ1() throws Exception {
     }
 
     int exitCode = p.waitFor();
+    if (exitCode != 0) {
+    throw new RuntimeException("Q1 MapReduce job failed!");
+}
     System.out.println("MapReduce Job Exit Code: " + exitCode);
 
     long end = System.currentTimeMillis();
@@ -59,7 +78,23 @@ public void runQ2() throws Exception {
     long start = System.currentTimeMillis();
 
     // -------- Delete old output --------
-    Runtime.getRuntime().exec("hdfs dfs -rm -r /etl/output/mapreduce/q2");
+    ProcessBuilder deletePB = new ProcessBuilder(
+        "hdfs", "dfs", "-rm", "-r", "/etl/output/mapreduce/q2"
+    );
+
+    deletePB.redirectErrorStream(true);
+    Process deleteProcess = deletePB.start();
+
+    BufferedReader delReader = new BufferedReader(
+        new InputStreamReader(deleteProcess.getInputStream())
+    );
+
+    String delLine;
+    while ((delLine = delReader.readLine()) != null) {
+        System.out.println(delLine);
+    }
+
+    deleteProcess.waitFor();
 
     // -------- Run MapReduce properly --------
     ProcessBuilder pb = new ProcessBuilder(
@@ -102,7 +137,67 @@ public void runQ2() throws Exception {
 }
 
     @Override
-    public void runQ3() throws Exception {
-        System.out.println("Q3 not implemented yet.");
+ 
+public void runQ3() throws Exception {
+
+    System.out.println("Running MapReduce Q3...");
+
+    long start = System.currentTimeMillis();
+
+    // delete old output
+    ProcessBuilder deletePB = new ProcessBuilder(
+        "hdfs", "dfs", "-rm", "-r", "/etl/output/mapreduce/q3"
+    );
+
+    deletePB.redirectErrorStream(true);
+    Process deleteProcess = deletePB.start();
+
+    BufferedReader delReader = new BufferedReader(
+        new InputStreamReader(deleteProcess.getInputStream())
+    );
+
+    String delLine;
+    while ((delLine = delReader.readLine()) != null) {
+        System.out.println(delLine);
     }
+
+    deleteProcess.waitFor();
+
+    ProcessBuilder pb = new ProcessBuilder(
+            "hadoop", "jar",
+            "scripts/mapreduce/q3.jar",
+            "Q3Driver",
+            "/etl/input",
+            "/etl/output/mapreduce/q3"
+    );
+
+    pb.redirectErrorStream(true);
+    Process p = pb.start();
+
+    BufferedReader reader = new BufferedReader(
+            new InputStreamReader(p.getInputStream())
+    );
+
+    String line;
+    while ((line = reader.readLine()) != null) {
+        System.out.println(line);
+    }
+
+    int exitCode = p.waitFor();
+    System.out.println("MapReduce Job Exit Code: " + exitCode);
+
+    if (exitCode != 0) {
+        throw new RuntimeException("Q3 job failed!");
+    }
+
+    long end = System.currentTimeMillis();
+    long runtime = end - start;
+
+    System.out.println("Runtime calculated: " + runtime);
+
+    // -------- Load into DB --------
+    ResultLoader.loadQ3(runtime);
+
+    System.out.println("MapReduce Q3 completed.");
+}
 }
