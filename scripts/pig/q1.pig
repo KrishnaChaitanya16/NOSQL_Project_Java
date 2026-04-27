@@ -10,28 +10,26 @@ parsed = FOREACH raw GENERATE
     FLATTEN(
         REGEX_EXTRACT_ALL(
             line,
-            '^(\\S+) \\S+ \\S+ \\[(.*?)\\] \\"(\\S+) (\\S+) (\\S+)\\" (\\d{3}) (\\S+)'
+            '^(\\S+) \\S+ \\S+ \\[([^\\]]+)\\] \\".*\\" (\\d{3}) (\\S+)$'
         )
     ) AS (
         host:chararray,
         log_time:chararray,
-        method:chararray,
-        path:chararray,
-        proto:chararray,
         status:chararray,
         bytes:chararray
     );
 
--- -------- Extract fields --------
+-- -------- Extract fields (keep host for null-check in SPLIT) --------
 extracted = FOREACH parsed GENERATE
+    host,
     log_time,
     status,
     bytes;
 
--- -------- Filter nulls on key fields --------
+-- -------- Split: malformed = line could not be parsed by the regex --------
 SPLIT extracted INTO
-    filtered IF (log_time != '') AND (status != ''),
-    bad_records OTHERWISE;
+    filtered     IF (host IS NOT NULL) AND (host != '') AND (status IS NOT NULL) AND (status != ''),
+    bad_records  OTHERWISE;
 STORE bad_records INTO '$OUTPUT_MALFORMED' USING PigStorage('\t');
 
 -- -------- Extract date --------

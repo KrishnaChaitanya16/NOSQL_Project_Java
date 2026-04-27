@@ -8,37 +8,46 @@ import org.apache.hadoop.mapreduce.Mapper;
 
 public class Q1Mapper extends Mapper<LongWritable, Text, Text, Text> {
 
-    private static final Pattern pattern = Pattern.compile(
-        "^(\\S+) \\S+ \\S+ \\[(.*?)\\] \"(\\S+) (\\S+) (\\S+)\" (\\d{3}) (\\S+)"
+    enum LogCounter {
+        MALFORMED_RECORDS
+    }
+
+    // Outer CLF pattern — accepts any request string inside quotes (protocol is optional)
+    private static final Pattern LOG_PATTERN = Pattern.compile(
+        "^(\\S+)\\s+\\S+\\s+\\S+\\s+\\[([^\\]]+)\\]\\s+\"(.*)\"\\s+(\\d{3})\\s+(\\S+)$"
     );
 
+    @Override
     public void map(LongWritable key, Text value, Context context)
             throws IOException, InterruptedException {
 
-        String line = value.toString();
-        Matcher matcher = pattern.matcher(line);
+        String line = value.toString().trim();
+        if (line.isEmpty()) return;
 
-        if (matcher.find()) {
-            try {
-                String timestamp = matcher.group(2);
-                String status = matcher.group(6);
-                String bytesStr = matcher.group(7);
-
-                // Extract date (01/Jul/1995)
-                String date = timestamp.split(":")[0];
-
-                int bytes = bytesStr.equals("-") ? 0 : Integer.parseInt(bytesStr);
-
-                // Key: date_status
-                // Value: count_bytes
-                context.write(
-                    new Text(date + "_" + status),
-                    new Text("1_" + bytes)
-                );
-
-            } catch (Exception e) {
-                // skip malformed records but don't crash
-            }
+        Matcher m = LOG_PATTERN.matcher(line);
+        if (!m.find()) {
+            // Cannot parse the basic CLF structure — truly malformed
+            context.getCounter(LogCounter.MALFORMED_RECORDS).increment(1);
+            return;
         }
+
+        // Group 2: full timestamp e.g. "01/Jul/1995:00:00:01 -0400"
+        String timestamp = m.group(2);
+        String status    = m.group(4);
+        String bytesStr  = m.group(5);
+
+        // Extract date (e.g. "01/Jul/1995")
+        String date = timestamp.split(":")[0];
+
+        // Treat "-" or non-numeric as 0 per spec
+        long bytes = 0;
+        if (!bytesStr.equals("-")) {
+            try { bytes = Long.parseLong(bytesStr); } catch (NumberFormatException e) { bytes = 0; }
+        }
+
+        context.write(
+            new Text(date + "_" + status),
+            new Text("1_" + bytes)
+        );
     }
 }

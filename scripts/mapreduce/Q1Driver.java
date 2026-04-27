@@ -51,19 +51,6 @@ public class Q1Driver {
 
         System.out.println("Runtime (ms): " + runtime);
 
-        // -------- After Job: Load to DB --------
-        if (success) {
-            System.out.println("Job completed successfully. Loading results to DB...");
-
-            // copy output first using terminal:
-            // hdfs dfs -get /etl/output/mapreduce/q1 ./q1_output
-
-            com.etl.db.ResultLoader.loadQ1(
-                "q1_output/part-r-00000",
-                runtime
-            );
-        }
-
         System.exit(success ? 0 : 1);
     }
 }

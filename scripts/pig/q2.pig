@@ -5,24 +5,34 @@
 
 raw = LOAD '$INPUT' USING TextLoader() AS (line:chararray);
 
+-- Parse using lenient outer CLF regex — protocol inside request is optional
 parsed = FOREACH raw GENERATE
     FLATTEN(
         REGEX_EXTRACT_ALL(
             line,
-            '^(\\S+) \\S+ \\S+ \\[.*?\\] \\"(?:GET|POST|HEAD) (\\S+) \\S+\\" \\d{3} (\\S+)'
+            '^(\\S+) \\S+ \\S+ \\[([^\\]]+)\\] \\"(\\S+) (\\S+)(?:\\s+\\S+)?\\" (\\d{3}) (\\S+)$'
         )
     ) AS (
         host:chararray,
+        log_time:chararray,
+        method:chararray,
         path:chararray,
+        status:chararray,
         bytes:chararray
     );
 
+-- Malformed = line could not be parsed by the CLF regex at all
 SPLIT parsed INTO
-    filtered IF (host != '') AND (path != '') AND (path != '/') AND STARTSWITH(path, '/') AND (path != '-'),
-    bad_records OTHERWISE;
+    filtered     IF (host IS NOT NULL) AND (host != '') AND (status IS NOT NULL) AND (status != ''),
+    bad_records  OTHERWISE;
 STORE bad_records INTO '$OUTPUT_MALFORMED' USING PigStorage('\t');
 
-with_bytes = FOREACH filtered GENERATE
+-- Business-logic filter: standard HTTP methods and valid paths only (not malformed)
+cleaned = FILTER filtered BY
+    (method == 'GET' OR method == 'POST' OR method == 'HEAD')
+    AND STARTSWITH(path, '/');
+
+with_bytes = FOREACH cleaned GENERATE
     path,
     host,
     (bytes == '-' ? 0L : (long)bytes) AS byte_val;
