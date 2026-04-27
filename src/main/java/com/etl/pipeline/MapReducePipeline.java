@@ -43,6 +43,8 @@ public class MapReducePipeline implements Pipeline {
             pb.redirectErrorStream(true);
             Process p = pb.start();
 
+            // Track the LAST seen counter value per job (Hadoop may print it multiple times)
+            long lastMalformed = 0;
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String line;
             while ((line = reader.readLine()) != null) {
@@ -50,10 +52,11 @@ public class MapReducePipeline implements Pipeline {
                 if (line.contains("MALFORMED_RECORDS=")) {
                     try {
                         String val = line.substring(line.indexOf("MALFORMED_RECORDS=") + 18).trim();
-                        totalMalformed += Long.parseLong(val);
+                        lastMalformed = Long.parseLong(val);
                     } catch (Exception e) {}
                 }
             }
+            totalMalformed += lastMalformed;
 
             int exitCode = p.waitFor();
             System.out.println("MapReduce Q1 Batch " + batchId + " Exit Code: " + exitCode);
@@ -105,7 +108,9 @@ public class MapReducePipeline implements Pipeline {
             );
             pb.redirectErrorStream(true);
             Process p = pb.start();
-            
+
+            // Track the LAST seen counter value per job
+            long lastMalformed = 0;
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String line;
             while ((line = reader.readLine()) != null) {
@@ -113,10 +118,11 @@ public class MapReducePipeline implements Pipeline {
                 if (line.contains("MALFORMED_RECORDS=")) {
                     try {
                         String val = line.substring(line.indexOf("MALFORMED_RECORDS=") + 18).trim();
-                        totalMalformed += Long.parseLong(val);
+                        lastMalformed = Long.parseLong(val);
                     } catch (Exception e) {}
                 }
             }
+            totalMalformed += lastMalformed;
 
             int exitCode = p.waitFor();
             System.out.println("MapReduce Q2 Stage-1 Batch " + batchId + " Exit Code: " + exitCode);
@@ -190,6 +196,8 @@ public class MapReducePipeline implements Pipeline {
             pb.redirectErrorStream(true);
             Process p = pb.start();
 
+            // Track the LAST seen counter value per job
+            long lastMalformed = 0;
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String line;
             while ((line = reader.readLine()) != null) {
@@ -197,10 +205,11 @@ public class MapReducePipeline implements Pipeline {
                 if (line.contains("MALFORMED_RECORDS=")) {
                     try {
                         String val = line.substring(line.indexOf("MALFORMED_RECORDS=") + 18).trim();
-                        totalMalformed += Long.parseLong(val);
+                        lastMalformed = Long.parseLong(val);
                     } catch (Exception e) {}
                 }
             }
+            totalMalformed += lastMalformed;
 
             int exitCode = p.waitFor();
             System.out.println("MapReduce Q3 Batch " + batchId + " Exit Code: " + exitCode);
