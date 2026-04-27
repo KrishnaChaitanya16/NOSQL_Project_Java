@@ -23,6 +23,9 @@ public class Q3Mapper extends Mapper<LongWritable, Text, Text, Text> {
                 return;
             }
 
+            // -------- Extract host --------
+            String host = parts[0];
+
             // -------- Extract datetime --------
             String datetime = parts[3];
 
@@ -55,9 +58,11 @@ public class Q3Mapper extends Mapper<LongWritable, Text, Text, Text> {
             String outKey = date + "_" + hour;
 
             if (status >= 400) {
-                context.write(new Text(outKey), new Text("1_1"));
+                // error record: total=1, error=1, host included
+                context.write(new Text(outKey), new Text("1_1_" + host));
             } else {
-                context.write(new Text(outKey), new Text("1_0"));
+                // non-error record: total=1, error=0, no host
+                context.write(new Text(outKey), new Text("1_0_"));
             }
 
         } catch (Exception e) {

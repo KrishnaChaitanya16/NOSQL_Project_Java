@@ -1,203 +1,228 @@
-
 package com.etl.pipeline;
+
 import com.etl.db.ResultLoader;
+import com.etl.util.BatchSplitter;
+
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.util.List;
 
 public class MapReducePipeline implements Pipeline {
 
+    // ----------------------------------------------------------------
+    // Q1 – Daily request count + total bytes per status code
+    // ----------------------------------------------------------------
     @Override
-public void runQ1() throws Exception {
+    public void runQ1() throws Exception {
 
-    System.out.println("Running MapReduce Q1...");
+        System.out.println("Running MapReduce Q1...");
 
-    long start = System.currentTimeMillis();
+        List<String> batches = BatchSplitter.split();
+        long totalRuntime = 0;
+        long totalMalformed = 0;
 
-    // delete old output
-   ProcessBuilder deletePB = new ProcessBuilder(
-        "hdfs", "dfs", "-rm", "-r", "/etl/output/mapreduce/q1"
-);
+        for (int batchId = 1; batchId <= batches.size(); batchId++) {
+            String inputPath  = batches.get(batchId - 1);
+            String outputPath = "/etl/output/mapreduce/q1/batch_" + batchId;
 
-deletePB.redirectErrorStream(true);
-Process deleteProcess = deletePB.start();
+            System.out.println("\n--- MapReduce Q1 Batch " + batchId + "/" + batches.size() + " ---");
+            System.out.println("  Input : " + inputPath);
+            System.out.println("  Output: " + outputPath);
 
-BufferedReader delReader = new BufferedReader(
-        new InputStreamReader(deleteProcess.getInputStream())
-);
+            long start = System.currentTimeMillis();
 
-String delLine;
-while ((delLine = delReader.readLine()) != null) {
-    System.out.println(delLine);
-}
+            runCommand("hdfs", "dfs", "-rm", "-r", outputPath);
 
-deleteProcess.waitFor();
+            ProcessBuilder pb = new ProcessBuilder(
+                "hadoop", "jar",
+                "scripts/mapreduce/q1.jar",
+                "Q1Driver",
+                inputPath,
+                outputPath
+            );
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
 
-    
-    ProcessBuilder pb = new ProcessBuilder(
-            "hadoop", "jar",
-            "scripts/mapreduce/q1.jar",
-            "Q1Driver",
-            "/etl/input",
-            "/etl/output/mapreduce/q1"
-    );
+            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                System.out.println(line);
+                if (line.contains("MALFORMED_RECORDS=")) {
+                    try {
+                        String val = line.substring(line.indexOf("MALFORMED_RECORDS=") + 18).trim();
+                        totalMalformed += Long.parseLong(val);
+                    } catch (Exception e) {}
+                }
+            }
 
-    pb.redirectErrorStream(true);
-    Process p = pb.start();
+            int exitCode = p.waitFor();
+            System.out.println("MapReduce Q1 Batch " + batchId + " Exit Code: " + exitCode);
+            if (exitCode != 0) throw new RuntimeException("Q1 MapReduce Batch " + batchId + " failed!");
 
-  
-    BufferedReader reader = new BufferedReader(
-            new InputStreamReader(p.getInputStream())
-    );
+            long batchRuntime = System.currentTimeMillis() - start;
+            totalRuntime += batchRuntime;
+            System.out.println("Batch " + batchId + " runtime: " + batchRuntime + " ms");
 
-    String line;
-    while ((line = reader.readLine()) != null) {
-        System.out.println(line);
+            ResultLoader.loadQ1(batchId, batches.size(), totalRuntime);
+        }
+
+        System.out.println("\nMapReduce Q1 completed. Total runtime: " + totalRuntime + " ms");
+        System.out.println("==> TOTAL MALFORMED RECORDS FOR Q1: " + totalMalformed);
+        System.out.printf("Total batches: %d  |  Avg batch size: %.0f lines%n",
+            batches.size(), (double) BatchSplitter.BATCH_SIZE);
     }
 
-    int exitCode = p.waitFor();
-    if (exitCode != 0) {
-    throw new RuntimeException("Q1 MapReduce job failed!");
-}
-    System.out.println("MapReduce Job Exit Code: " + exitCode);
-
-    long end = System.currentTimeMillis();
-    long runtime = end - start;
-    System.out.println("Runtime calculated: " + runtime);
-
-    // load into DB
-    ResultLoader.loadQ1(runtime);
-
-    System.out.println("MapReduce Q1 completed.");
-}
-    
+    // ----------------------------------------------------------------
+    // Q2 – Top 20 most-requested resources  (TWO-STAGE)
+    // Stage 1: per-batch aggregation (all resources, with host list)
+    // Stage 2: global merge → true Top-20, exact distinct hosts
+    // ----------------------------------------------------------------
     @Override
-public void runQ2() throws Exception {
+    public void runQ2() throws Exception {
 
-    System.out.println("Running MapReduce Q2...");
+        System.out.println("Running MapReduce Q2 (Two-Stage)...");
 
-    long start = System.currentTimeMillis();
+        List<String> batches = BatchSplitter.split();
+        long totalRuntime = 0;
+        long totalMalformed = 0;
 
-    // -------- Delete old output --------
-    ProcessBuilder deletePB = new ProcessBuilder(
-        "hdfs", "dfs", "-rm", "-r", "/etl/output/mapreduce/q2"
-    );
+        // ---- Stage 1: one job per batch ----
+        for (int batchId = 1; batchId <= batches.size(); batchId++) {
+            String inputPath  = batches.get(batchId - 1);
+            String outputPath = "/etl/output/mapreduce/q2/stage1/batch_" + batchId;
 
-    deletePB.redirectErrorStream(true);
-    Process deleteProcess = deletePB.start();
+            System.out.println("\n--- MapReduce Q2 Stage-1 Batch " + batchId + "/" + batches.size() + " ---");
 
-    BufferedReader delReader = new BufferedReader(
-        new InputStreamReader(deleteProcess.getInputStream())
-    );
+            long start = System.currentTimeMillis();
+            runCommand("hdfs", "dfs", "-rm", "-r", outputPath);
 
-    String delLine;
-    while ((delLine = delReader.readLine()) != null) {
-        System.out.println(delLine);
-    }
+            ProcessBuilder pb = new ProcessBuilder(
+                "hadoop", "jar",
+                "scripts/mapreduce/q2.jar",
+                "Q2Driver",
+                inputPath,
+                outputPath
+            );
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            
+            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                System.out.println(line);
+                if (line.contains("MALFORMED_RECORDS=")) {
+                    try {
+                        String val = line.substring(line.indexOf("MALFORMED_RECORDS=") + 18).trim();
+                        totalMalformed += Long.parseLong(val);
+                    } catch (Exception e) {}
+                }
+            }
 
-    deleteProcess.waitFor();
+            int exitCode = p.waitFor();
+            System.out.println("MapReduce Q2 Stage-1 Batch " + batchId + " Exit Code: " + exitCode);
+            if (exitCode != 0) throw new RuntimeException("Q2 Stage-1 Batch " + batchId + " failed!");
 
-    // -------- Run MapReduce properly --------
-    ProcessBuilder pb = new ProcessBuilder(
+            totalRuntime += System.currentTimeMillis() - start;
+        }
+
+        // ---- Stage 2: global merge across all batch outputs ----
+        String stage1Dir  = "/etl/output/mapreduce/q2/stage1";
+        String finalOutput = "/etl/output/mapreduce/q2/final";
+
+        System.out.println("\n--- MapReduce Q2 Stage-2 Global Merge ---");
+        runCommand("hdfs", "dfs", "-rm", "-r", finalOutput);
+
+        long mergeStart = System.currentTimeMillis();
+        ProcessBuilder pb2 = new ProcessBuilder(
             "hadoop", "jar",
-            "scripts/mapreduce/q2.jar",
-            "Q2Driver",
-            "/etl/input",
-            "/etl/output/mapreduce/q2"
-    );
+            "scripts/mapreduce/q2_merge.jar",
+            "Q2MergeDriver",
+            stage1Dir + "/*",      // glob: reads all batch_* sub-dirs
+            finalOutput
+        );
+        pb2.redirectErrorStream(true);
+        Process p2 = pb2.start();
+        new java.io.BufferedReader(new java.io.InputStreamReader(p2.getInputStream()))
+            .lines().forEach(System.out::println);
 
-    pb.redirectErrorStream(true);
-    Process p = pb.start();
+        int mergeExit = p2.waitFor();
+        System.out.println("MapReduce Q2 Stage-2 Exit Code: " + mergeExit);
+        if (mergeExit != 0) throw new RuntimeException("Q2 Stage-2 global merge failed!");
 
-    // -------- Print logs --------
-    BufferedReader reader = new BufferedReader(
-            new InputStreamReader(p.getInputStream())
-    );
+        totalRuntime += System.currentTimeMillis() - mergeStart;
 
-    String line;
-    while ((line = reader.readLine()) != null) {
-        System.out.println(line);
+        // Load final merged result into DB with batch_id = total batches processed
+        ResultLoader.loadQ2(batches.size(), batches.size(), totalRuntime);
+
+        System.out.println("\nMapReduce Q2 completed (Two-Stage). Total runtime: " + totalRuntime + " ms");
+        System.out.println("==> TOTAL MALFORMED RECORDS FOR Q2: " + totalMalformed);
     }
 
-    int exitCode = p.waitFor();
-    System.out.println("MapReduce Job Exit Code: " + exitCode);
-
-    if (exitCode != 0) {
-        throw new RuntimeException("Q2 MapReduce job failed!");
-    }
-
-    long end = System.currentTimeMillis();
-    long runtime = end - start;
-
-    System.out.println("Runtime calculated: " + runtime);
-
-    // -------- Load into DB --------
-    ResultLoader.loadQ2(runtime);
-
-    System.out.println("MapReduce Q2 completed.");
-}
-
+    // ----------------------------------------------------------------
+    // Q3 – Error rate per hour
+    // ----------------------------------------------------------------
     @Override
- 
-public void runQ3() throws Exception {
+    public void runQ3() throws Exception {
 
-    System.out.println("Running MapReduce Q3...");
+        System.out.println("Running MapReduce Q3...");
 
-    long start = System.currentTimeMillis();
+        List<String> batches = BatchSplitter.split();
+        long totalRuntime = 0;
+        long totalMalformed = 0;
 
-    // delete old output
-    ProcessBuilder deletePB = new ProcessBuilder(
-        "hdfs", "dfs", "-rm", "-r", "/etl/output/mapreduce/q3"
-    );
+        for (int batchId = 1; batchId <= batches.size(); batchId++) {
+            String inputPath  = batches.get(batchId - 1);
+            String outputPath = "/etl/output/mapreduce/q3/batch_" + batchId;
 
-    deletePB.redirectErrorStream(true);
-    Process deleteProcess = deletePB.start();
+            System.out.println("\n--- MapReduce Q3 Batch " + batchId + "/" + batches.size() + " ---");
 
-    BufferedReader delReader = new BufferedReader(
-        new InputStreamReader(deleteProcess.getInputStream())
-    );
+            long start = System.currentTimeMillis();
 
-    String delLine;
-    while ((delLine = delReader.readLine()) != null) {
-        System.out.println(delLine);
+            runCommand("hdfs", "dfs", "-rm", "-r", outputPath);
+
+            ProcessBuilder pb = new ProcessBuilder(
+                "hadoop", "jar",
+                "scripts/mapreduce/q3.jar",
+                "Q3Driver",
+                inputPath,
+                outputPath
+            );
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+
+            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                System.out.println(line);
+                if (line.contains("MALFORMED_RECORDS=")) {
+                    try {
+                        String val = line.substring(line.indexOf("MALFORMED_RECORDS=") + 18).trim();
+                        totalMalformed += Long.parseLong(val);
+                    } catch (Exception e) {}
+                }
+            }
+
+            int exitCode = p.waitFor();
+            System.out.println("MapReduce Q3 Batch " + batchId + " Exit Code: " + exitCode);
+            if (exitCode != 0) throw new RuntimeException("Q3 MapReduce Batch " + batchId + " failed!");
+
+            long batchRuntime = System.currentTimeMillis() - start;
+            totalRuntime += batchRuntime;
+
+            ResultLoader.loadQ3(batchId, batches.size(), totalRuntime);
+        }
+
+        System.out.println("\nMapReduce Q3 completed. Total runtime: " + totalRuntime + " ms");
+        System.out.println("==> TOTAL MALFORMED RECORDS FOR Q3: " + totalMalformed);
     }
 
-    deleteProcess.waitFor();
-
-    ProcessBuilder pb = new ProcessBuilder(
-            "hadoop", "jar",
-            "scripts/mapreduce/q3.jar",
-            "Q3Driver",
-            "/etl/input",
-            "/etl/output/mapreduce/q3"
-    );
-
-    pb.redirectErrorStream(true);
-    Process p = pb.start();
-
-    BufferedReader reader = new BufferedReader(
-            new InputStreamReader(p.getInputStream())
-    );
-
-    String line;
-    while ((line = reader.readLine()) != null) {
-        System.out.println(line);
+    // -------- Helper: fire-and-forget HDFS command --------
+    private void runCommand(String... cmd) throws Exception {
+        ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.redirectErrorStream(true);
+        Process p = pb.start();
+        new BufferedReader(new InputStreamReader(p.getInputStream()))
+            .lines().forEach(System.out::println);
+        p.waitFor();
     }
-
-    int exitCode = p.waitFor();
-    System.out.println("MapReduce Job Exit Code: " + exitCode);
-
-    if (exitCode != 0) {
-        throw new RuntimeException("Q3 job failed!");
-    }
-
-    long end = System.currentTimeMillis();
-    long runtime = end - start;
-
-    System.out.println("Runtime calculated: " + runtime);
-
-    // -------- Load into DB --------
-    ResultLoader.loadQ3(runtime);
-
-    System.out.println("MapReduce Q3 completed.");
-}
 }

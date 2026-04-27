@@ -1,1 +1,6 @@
 data/raw/*
+*.class
+*.jar
+*.log
+pig_*.log
+.DS_Store
