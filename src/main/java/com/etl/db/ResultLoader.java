@@ -567,7 +567,9 @@ public class ResultLoader {
 
     private static void printBatchSummary(String pipeline, String query,
                                            int totalBatches, long totalRuntimeMs) {
-        long totalInputRecords = (long) totalBatches * BatchSplitter.BATCH_SIZE;
+        long totalInputRecords = BatchSplitter.lastTotalLines > 0 
+                                 ? BatchSplitter.lastTotalLines 
+                                 : ((long) totalBatches * BatchSplitter.BATCH_SIZE);
         System.out.println("\n========================================");
         System.out.println("  Pipeline      : " + pipeline.toUpperCase());
         System.out.println("  Query         : " + query);

@@ -80,7 +80,7 @@ public class PigPipeline implements Pipeline {
         System.out.println("\nPig Q1 completed. Total runtime: " + totalRuntime + " ms");
         System.out.println("==> TOTAL MALFORMED RECORDS FOR Q1: " + totalMalformed);
         System.out.printf("Total batches: %d  |  Avg batch size: %.0f lines%n",
-            batches.size(), (double) BatchSplitter.BATCH_SIZE);
+            batches.size(), BatchSplitter.lastTotalLines > 0 ? (double) BatchSplitter.lastTotalLines / batches.size() : (double) BatchSplitter.BATCH_SIZE);
     }
 
     // ----------------------------------------------------------------

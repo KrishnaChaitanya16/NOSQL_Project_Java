@@ -24,6 +24,8 @@ public class BatchSplitter {
     public static final String BATCHES_DIR = "/etl/input/batches";
     public static final String INPUT_DIR   = "/etl/input";
 
+    public static long lastTotalLines = 0;
+
     /**
      * Splits the raw HDFS input into batch files.
      * @return List of HDFS paths to each batch file, in order.
@@ -104,6 +106,7 @@ public class BatchSplitter {
         System.out.printf("Average batch size: %.0f%n",
                            (double) totalLines / batchPaths.size());
 
+        lastTotalLines = totalLines;
         return batchPaths;
     }
 }
