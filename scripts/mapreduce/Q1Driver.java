@@ -14,16 +14,6 @@ public class Q1Driver {
             System.exit(-1);
         }
 
-        // -------- Batch Info --------
-        int totalRecords = 3461612;
-        int batchSize = 100000;
-
-        int numBatches = (int) Math.ceil((double) totalRecords / batchSize);
-
-        System.out.println("Batch Size: " + batchSize);
-        System.out.println("Total Records: " + totalRecords);
-        System.out.println("Total Batches: " + numBatches);
-        System.out.println("Average Batch Size: " + (totalRecords / numBatches));
 
         // -------- Hadoop Job --------
         Configuration conf = new Configuration();

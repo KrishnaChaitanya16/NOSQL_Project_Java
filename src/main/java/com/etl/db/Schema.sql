@@ -15,7 +15,7 @@ CREATE TABLE results (
 
     -- Metrics
     request_count INT,
-    total_requests INT,          -- ⭐ added for Q3
+    total_requests INT,          --  added for Q3
     total_bytes BIGINT,
     distinct_hosts INT,
     error_rate DOUBLE PRECISION,

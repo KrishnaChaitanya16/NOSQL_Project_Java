@@ -49,7 +49,7 @@ public class Q3Mapper extends Mapper<LongWritable, Text, Text, Text> {
 
         String outKey = date + "_" + hour;
 
-        if (status >= 400) {
+        if (status >= 400 && status <= 599) {
             context.write(new Text(outKey), new Text("1_1_" + host));
         } else {
             context.write(new Text(outKey), new Text("1_0_"));
