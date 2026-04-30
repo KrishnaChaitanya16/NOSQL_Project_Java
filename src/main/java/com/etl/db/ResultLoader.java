@@ -432,6 +432,144 @@ public class ResultLoader {
     }
 
     // ============================================================
+    // MONGO LOADERS
+    // ============================================================
+
+    public static void loadMongoQ1(int batchId, int totalBatches, long runtime, Iterable<org.bson.Document> docs) throws Exception {
+        Properties props = new Properties();
+        props.load(new FileInputStream("config/db.properties"));
+        Connection conn = DriverManager.getConnection(
+            props.getProperty("db.url"), props.getProperty("db.user"), props.getProperty("db.password"));
+
+        PreparedStatement ps = conn.prepareStatement(
+            "INSERT INTO results (" +
+            "pipeline_name, query_name, run_id, batch_id, " +
+            "log_date, log_hour, status_code, resource_path, " +
+            "request_count, total_requests, total_bytes, distinct_hosts, error_rate, runtime_ms" +
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        );
+
+        int totalInserted = 0;
+        for (org.bson.Document doc : docs) {
+            org.bson.Document id = (org.bson.Document) doc.get("_id");
+            ps.setString(1, "mongo");
+            ps.setString(2, "Q1");
+            ps.setInt(3, 1);
+            ps.setInt(4, batchId);
+            ps.setString(5, id.getString("log_date"));
+            ps.setNull(6, Types.INTEGER);
+            ps.setInt(7, ((Number) id.get("status_code")).intValue());
+            ps.setNull(8, Types.VARCHAR);
+            ps.setInt(9, ((Number) doc.get("request_count")).intValue());
+            ps.setNull(10, Types.INTEGER);
+            ps.setLong(11, ((Number) doc.get("total_bytes")).longValue());
+            ps.setNull(12, Types.INTEGER);
+            ps.setNull(13, Types.DOUBLE);
+            ps.setLong(14, runtime);
+
+            ps.addBatch();
+            totalInserted++;
+        }
+
+        ps.executeBatch();
+        ps.close(); conn.close();
+
+        System.out.printf("Mongo Q1 Batch %d/%d → %d rows inserted%n",
+            batchId, totalBatches, totalInserted);
+
+        if (batchId == totalBatches) {
+            printBatchSummary("mongo", "Q1", totalBatches, runtime);
+            printQ1Results("mongo");
+        }
+    }
+
+    public static void loadMongoQ2(int batchId, int totalBatches, long runtime, Iterable<org.bson.Document> docs) throws Exception {
+        Properties props = new Properties();
+        props.load(new FileInputStream("config/db.properties"));
+        Connection conn = DriverManager.getConnection(
+            props.getProperty("db.url"), props.getProperty("db.user"), props.getProperty("db.password"));
+
+        PreparedStatement ps = conn.prepareStatement(
+            "INSERT INTO results (" +
+            "pipeline_name, query_name, run_id, batch_id, " +
+            "resource_path, request_count, total_bytes, distinct_hosts, runtime_ms" +
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        );
+
+        int totalInserted = 0;
+        for (org.bson.Document doc : docs) {
+            ps.setString(1, "mongo");
+            ps.setString(2, "Q2");
+            ps.setInt(3, 1);
+            ps.setInt(4, batchId);
+            ps.setString(5, doc.getString("_id"));
+            ps.setInt(6, ((Number) doc.get("req_count")).intValue());
+            ps.setLong(7, ((Number) doc.get("bytes")).longValue());
+            ps.setInt(8, ((Number) doc.get("distinct_hosts")).intValue());
+            ps.setLong(9, runtime);
+
+            ps.addBatch();
+            totalInserted++;
+        }
+
+        ps.executeBatch();
+        ps.close(); conn.close();
+
+        System.out.printf("Mongo Q2 Batch %d/%d → %d rows inserted%n",
+            batchId, totalBatches, totalInserted);
+
+        if (batchId == totalBatches) {
+            printBatchSummary("mongo", "Q2", totalBatches, runtime);
+            printQ2Results("mongo");
+        }
+    }
+
+    public static void loadMongoQ3(int batchId, int totalBatches, long runtime, Iterable<org.bson.Document> docs) throws Exception {
+        Properties props = new Properties();
+        props.load(new FileInputStream("config/db.properties"));
+        Connection conn = DriverManager.getConnection(
+            props.getProperty("db.url"), props.getProperty("db.user"), props.getProperty("db.password"));
+
+        PreparedStatement ps = conn.prepareStatement(
+            "INSERT INTO results (" +
+            "pipeline_name, query_name, run_id, batch_id, " +
+            "log_date, log_hour, total_requests, request_count, error_rate, distinct_hosts, runtime_ms" +
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        );
+
+        int totalInserted = 0;
+        for (org.bson.Document doc : docs) {
+            org.bson.Document id = (org.bson.Document) doc.get("_id");
+            ps.setString(1, "mongo");
+            ps.setString(2, "Q3");
+            ps.setInt(3, 1);
+            ps.setInt(4, batchId);
+            ps.setString(5, id.getString("log_date"));
+            ps.setInt(6, ((Number) id.get("log_hour")).intValue());
+            ps.setInt(7, ((Number) doc.get("total_requests")).intValue());
+            ps.setInt(8, ((Number) doc.get("error_requests")).intValue());
+            double rawRate = ((Number) doc.get("error_rate")).doubleValue();
+            ps.setDouble(9, Math.round(rawRate * 100000.0) / 100000.0);
+            ps.setInt(10, ((Number) doc.get("distinct_hosts")).intValue());
+            ps.setLong(11, runtime);
+
+            ps.addBatch();
+            totalInserted++;
+        }
+
+        ps.executeBatch();
+        ps.close(); conn.close();
+
+        System.out.printf("Mongo Q3 Batch %d/%d → %d rows inserted%n",
+            batchId, totalBatches, totalInserted);
+
+        if (batchId == totalBatches) {
+            printBatchSummary("mongo", "Q3", totalBatches, runtime);
+            printQ3Results("mongo");
+        }
+    }
+
+    // ============================================================
     // RESULT PRINTERS  –  prints exactly the columns the assignment requires
     // ============================================================
 

@@ -11,6 +11,7 @@ Ensure you have the following installed and running:
 * **Java 11+**
 * **Hadoop 3.x** (HDFS & MapReduce)
 * **Apache Pig 0.17+**
+* **MongoDB 7.0+**
 * **PostgreSQL** 
 
 ---
@@ -24,7 +25,7 @@ Run these commands from the root directory to compile the Java MapReduce jobs an
 
 ```bash
 # Compile the mapper/reducer/driver classes
-javac -cp ".:lib/postgresql-42.7.3.jar:$(hadoop classpath)" scripts/mapreduce/*.java -d scripts/mapreduce/
+javac -cp ".:lib/*:$(hadoop classpath)" scripts/mapreduce/*.java -d scripts/mapreduce/
 
 # Package them into execution JARs
 cd scripts/mapreduce
@@ -38,7 +39,7 @@ cd ../..
 Run this command to compile the main orchestration system (including `Main.java`, `BatchSplitter.java`, and `ResultLoader.java`):
 
 ```bash
-javac -cp ".:lib/postgresql-42.7.3.jar:$(hadoop classpath)" $(find src -name "*.java") -d .
+javac -cp ".:lib/*:$(hadoop classpath)" $(find src -name "*.java") -d .
 ```
 
 ---
@@ -56,10 +57,10 @@ psql -U postgres -d postgres -c "TRUNCATE TABLE results;"
 ### Start the Pipeline
 Launch the interactive orchestrator using this command:
 ```bash
-java -cp ".:lib/postgresql-42.7.3.jar:$(hadoop classpath)" com.etl.controller.Main
+java -cp ".:lib/*:$(hadoop classpath)" com.etl.controller.Main
 ```
 
-You will be presented with an interactive menu to select your Big Data Engine (MapReduce or Pig) and your desired Query (Q1, Q2, or Q3).
+You will be presented with an interactive menu to select your Big Data Engine (MapReduce, Pig, or MongoDB) and your desired Query (Q1, Q2, or Q3).
 
 ---
 

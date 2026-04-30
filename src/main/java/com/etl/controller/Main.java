@@ -1,6 +1,7 @@
 package com.etl.controller;
 
 import com.etl.pipeline.MapReducePipeline;
+import com.etl.pipeline.MongoPipeline;
 import com.etl.pipeline.PigPipeline;
 import com.etl.pipeline.Pipeline;
 
@@ -19,7 +20,8 @@ public class Main {
         System.out.println("\nSelect Pipeline Engine:");
         System.out.println("  1. MapReduce");
         System.out.println("  2. Pig");
-        System.out.print("Enter choice (1 or 2): ");
+        System.out.println("  3. MongoDB");
+        System.out.print("Enter choice (1, 2, or 3): ");
         String engineChoice = scanner.nextLine().trim();
         
         Pipeline pipeline = null;
@@ -27,6 +29,8 @@ public class Main {
             pipeline = new MapReducePipeline();
         } else if (engineChoice.equals("2") || engineChoice.equalsIgnoreCase("pig")) {
             pipeline = new PigPipeline();
+        } else if (engineChoice.equals("3") || engineChoice.equalsIgnoreCase("mongodb")) {
+            pipeline = new MongoPipeline();
         } else {
             System.out.println("Invalid engine selected. Exiting.");
             System.exit(1);
