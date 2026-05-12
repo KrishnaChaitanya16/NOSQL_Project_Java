@@ -54,7 +54,7 @@ aggregated = FOREACH grouped GENERATE
     group AS path,
     SUM(per_host.host_req_count)   AS request_count,
     SUM(per_host.host_total_bytes) AS total_bytes,
-    BagToString(per_host.host, ',') AS hosts:chararray;
+    BagToString(per_host.host, '#') AS hosts:chararray;
 
 -- Format output: path TAB count_bytes_hosts
 formatted = FOREACH aggregated GENERATE

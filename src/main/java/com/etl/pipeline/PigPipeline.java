@@ -1,7 +1,6 @@
 package com.etl.pipeline;
 
 import com.etl.db.ResultLoader;
-import com.etl.util.BatchSplitter;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -13,21 +12,21 @@ public class PigPipeline implements Pipeline {
     // Q1 – Daily request count + total bytes per status code
     // ----------------------------------------------------------------
     @Override
-    public void runQ1() throws Exception {
+    public void runQ1(int runId, List<String[]> batches) throws Exception {
 
         System.out.println("Running Pig Q1...");
 
-        // -------- Split input into batches --------
-        List<String> batches = BatchSplitter.split();
         long totalRuntime = 0;
         long totalMalformed = 0;
 
         for (int batchId = 1; batchId <= batches.size(); batchId++) {
-            String inputPath  = batches.get(batchId - 1);
+            String[] batchInfo = batches.get(batchId - 1);
+            String inputPath  = batchInfo[0];
+            String batchLabel = batchInfo[1];
             String outputPath = "/etl/output/pig/q1/batch_" + batchId;
             String outputMalformed = outputPath + "_malformed";
 
-            System.out.println("\n--- Pig Q1 Batch " + batchId + "/" + batches.size() + " ---");
+            System.out.println("\n--- Pig Q1 Batch " + batchId + "/" + batches.size() + " [" + batchLabel + "] ---");
             System.out.println("  Input : " + inputPath);
             System.out.println("  Output: " + outputPath);
 
@@ -74,13 +73,11 @@ public class PigPipeline implements Pipeline {
             System.out.println("Batch " + batchId + " runtime: " + batchRuntime + " ms");
 
             // -------- Load this batch's results into DB --------
-            ResultLoader.loadPigQ1(batchId, batches.size(), totalRuntime);
+            ResultLoader.loadPigQ1(runId, batchId, batches.size(), totalRuntime);
         }
 
         System.out.println("\nPig Q1 completed. Total runtime: " + totalRuntime + " ms");
         System.out.println("==> TOTAL MALFORMED RECORDS FOR Q1: " + totalMalformed);
-        System.out.printf("Total batches: %d  |  Avg batch size: %.0f lines%n",
-            batches.size(), BatchSplitter.lastTotalLines > 0 ? (double) BatchSplitter.lastTotalLines / batches.size() : (double) BatchSplitter.BATCH_SIZE);
     }
 
     // ----------------------------------------------------------------
@@ -89,21 +86,25 @@ public class PigPipeline implements Pipeline {
     // Stage 2: global merge via q2_merge.pig
     // ----------------------------------------------------------------
     @Override
-    public void runQ2() throws Exception {
+    public void runQ2(int runId, List<String[]> batches) throws Exception {
 
         System.out.println("Running Pig Q2 (Two-Stage)...");
 
-        List<String> batches = BatchSplitter.split();
         long totalRuntime = 0;
         long totalMalformed = 0;
 
+        String stage1Dir   = "/etl/output/pig/q2/stage1";
+        runCommand("hdfs", "dfs", "-rm", "-r", stage1Dir);
+
         // ---- Stage 1: one Pig job per batch ----
         for (int batchId = 1; batchId <= batches.size(); batchId++) {
-            String inputPath  = batches.get(batchId - 1);
+            String[] batchInfo = batches.get(batchId - 1);
+            String inputPath  = batchInfo[0];
+            String batchLabel = batchInfo[1];
             String outputPath = "/etl/output/pig/q2/stage1/batch_" + batchId;
             String outputMalformed = outputPath + "_malformed";
 
-            System.out.println("\n--- Pig Q2 Stage-1 Batch " + batchId + "/" + batches.size() + " ---");
+            System.out.println("\n--- Pig Q2 Stage-1 Batch " + batchId + "/" + batches.size() + " [" + batchLabel + "] ---");
 
             long start = System.currentTimeMillis();
             runCommand("hdfs", "dfs", "-rm", "-r", outputPath, outputMalformed);
@@ -143,7 +144,7 @@ public class PigPipeline implements Pipeline {
         }
 
         // ---- Stage 2: global merge ----
-        String stage1Dir   = "/etl/output/pig/q2/stage1";
+        // stage1Dir already defined above
         String finalOutput = "/etl/output/pig/q2/final";
 
         System.out.println("\n--- Pig Q2 Stage-2 Global Merge ---");
@@ -167,7 +168,7 @@ public class PigPipeline implements Pipeline {
 
         totalRuntime += System.currentTimeMillis() - mergeStart;
 
-        ResultLoader.loadPigQ2(batches.size(), batches.size(), totalRuntime);
+        ResultLoader.loadPigQ2(runId, batches.size(), batches.size(), totalRuntime);
 
         System.out.println("\nPig Q2 completed (Two-Stage). Total runtime: " + totalRuntime + " ms");
         System.out.println("==> TOTAL MALFORMED RECORDS FOR Q2: " + totalMalformed);
@@ -177,20 +178,21 @@ public class PigPipeline implements Pipeline {
     // Q3 – Error rate per hour
     // ----------------------------------------------------------------
     @Override
-    public void runQ3() throws Exception {
+    public void runQ3(int runId, List<String[]> batches) throws Exception {
 
         System.out.println("Running Pig Q3...");
 
-        List<String> batches = BatchSplitter.split();
         long totalRuntime = 0;
         long totalMalformed = 0;
 
         for (int batchId = 1; batchId <= batches.size(); batchId++) {
-            String inputPath  = batches.get(batchId - 1);
+            String[] batchInfo = batches.get(batchId - 1);
+            String inputPath  = batchInfo[0];
+            String batchLabel = batchInfo[1];
             String outputPath = "/etl/output/pig/q3/batch_" + batchId;
             String outputMalformed = outputPath + "_malformed";
 
-            System.out.println("\n--- Pig Q3 Batch " + batchId + "/" + batches.size() + " ---");
+            System.out.println("\n--- Pig Q3 Batch " + batchId + "/" + batches.size() + " [" + batchLabel + "] ---");
 
             long start = System.currentTimeMillis();
 
@@ -230,7 +232,7 @@ public class PigPipeline implements Pipeline {
             long batchRuntime = System.currentTimeMillis() - start;
             totalRuntime += batchRuntime;
 
-            ResultLoader.loadPigQ3(batchId, batches.size(), totalRuntime);
+            ResultLoader.loadPigQ3(runId, batchId, batches.size(), totalRuntime);
         }
 
         System.out.println("\nPig Q3 completed. Total runtime: " + totalRuntime + " ms");

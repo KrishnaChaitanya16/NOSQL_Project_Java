@@ -33,7 +33,7 @@ tokenized = FOREACH flattened_csvs GENERATE
     path,
     global_request_count,
     global_total_bytes,
-    FLATTEN(TOKENIZE(csv, ',')) AS host:chararray;
+    FLATTEN(TOKENIZE(csv, '#')) AS host:chararray;
 
 -- Get unique hosts per path
 unique_hosts = DISTINCT tokenized;
