@@ -11,7 +11,7 @@ Ensure you have the following installed and running:
 * **Java 11+**
 * **Hadoop 3.x** (HDFS & MapReduce)
 * **Apache Pig 0.17+**
-* **MongoDB 7.0+**
+* **MongoDB 7.0+** (mongosh CLI available)
 * **PostgreSQL** 
 
 ---
@@ -61,6 +61,9 @@ java -cp ".:lib/*:$(hadoop classpath)" com.etl.controller.Main
 ```
 
 You will be presented with an interactive menu to select your Big Data Engine (MapReduce, Pig, or MongoDB) and your desired Query (Q1, Q2, or Q3).
+
+### MongoDB Pipeline Scripts
+The MongoDB pipeline uses `mongosh` scripts in `scripts/mongo` to run the aggregation stages. The Java controller still parses HDFS input and loads results into PostgreSQL.
 
 ---
 
