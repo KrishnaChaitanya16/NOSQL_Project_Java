@@ -4,7 +4,6 @@ import java.io.*;
 import java.sql.*;
 import java.util.Properties;
 
-import com.etl.util.BatchSplitter;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -13,30 +12,91 @@ import org.apache.hadoop.fs.Path;
 public class ResultLoader {
 
     // ============================================================
-    // MAPREDUCE LOADERS
+    // SHARED HELPERS — write to run_metadata, batch_metadata,
+    //                   and malformed_record_summary tables
     // ============================================================
 
-    public static void loadQ1(int batchId, int totalBatches, long runtime) throws Exception {
-
+    /** Get a JDBC connection from db.properties */
+    private static Connection getConnection() throws Exception {
         Properties props = new Properties();
         props.load(new FileInputStream("config/db.properties"));
-        Connection conn = DriverManager.getConnection(
-            props.getProperty("db.url"), props.getProperty("db.user"), props.getProperty("db.password"));
+        return DriverManager.getConnection(
+            props.getProperty("db.url"),
+            props.getProperty("db.user"),
+            props.getProperty("db.password"));
+    }
 
+    /** Insert a row into run_metadata and return the generated run_id */
+    public static int createRun(String pipelineName) throws Exception {
+        Connection conn = getConnection();
+        PreparedStatement ps = conn.prepareStatement(
+            "INSERT INTO run_metadata (pipeline_name) VALUES (?)",
+            Statement.RETURN_GENERATED_KEYS);
+        ps.setString(1, pipelineName);
+        ps.executeUpdate();
+
+        ResultSet rs = ps.getGeneratedKeys();
+        rs.next();
+        int runId = rs.getInt(1);
+
+        rs.close(); ps.close(); conn.close();
+        System.out.println("Created run_id = " + runId + " for pipeline: " + pipelineName);
+        return runId;
+    }
+
+    /** Insert a row into batch_metadata */
+    public static void saveBatchMeta(int runId, int batchId, String batchLabel,
+                                      long batchSize, double avgBatchSize,
+                                      long recordsProcessed, long runtimeMs) throws Exception {
+        Connection conn = getConnection();
+        PreparedStatement ps = conn.prepareStatement(
+            "INSERT INTO batch_metadata " +
+            "(run_id, batch_id, batch_label, batch_size, average_batch_size, records_processed, runtime_ms) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?)");
+        ps.setInt(1, runId);
+        ps.setInt(2, batchId);
+        ps.setString(3, batchLabel);
+        ps.setLong(4, batchSize);
+        ps.setDouble(5, avgBatchSize);
+        ps.setLong(6, recordsProcessed);
+        ps.setLong(7, runtimeMs);
+        ps.executeUpdate();
+        ps.close(); conn.close();
+    }
+
+    /** Insert a row into malformed_record_summary */
+    public static void saveMalformed(int runId, int batchId, String queryName,
+                                      long malformedCount) throws Exception {
+        Connection conn = getConnection();
+        PreparedStatement ps = conn.prepareStatement(
+            "INSERT INTO malformed_record_summary " +
+            "(run_id, batch_id, query_name, malformed_record_count) " +
+            "VALUES (?, ?, ?, ?)");
+        ps.setInt(1, runId);
+        ps.setInt(2, batchId);
+        ps.setString(3, queryName);
+        ps.setLong(4, malformedCount);
+        ps.executeUpdate();
+        ps.close(); conn.close();
+    }
+
+    // ============================================================
+    // MAPREDUCE LOADERS — insert into query_results
+    // ============================================================
+
+    public static void loadQ1(int runId, int batchId, int totalBatches, long runtime) throws Exception {
+
+        Connection conn = getConnection();
         Configuration conf = new Configuration();
         FileSystem    fs   = FileSystem.get(conf);
 
-        // Read all part files from this batch's output directory
         String outputDir = "/etl/output/mapreduce/q1/batch_" + batchId;
         FileStatus[] parts = fs.listStatus(new Path(outputDir));
 
         PreparedStatement ps = conn.prepareStatement(
-            "INSERT INTO results (" +
-            "pipeline_name, query_name, run_id, batch_id, " +
-            "log_date, log_hour, status_code, resource_path, " +
-            "request_count, total_requests, total_bytes, distinct_hosts, error_rate, runtime_ms" +
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        );
+            "INSERT INTO query_results " +
+            "(run_id, batch_id, query_name, log_date, status_code, request_count, total_bytes) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?)");
 
         int totalInserted = 0;
 
@@ -57,20 +117,13 @@ public class ResultLoader {
                     int    count  = Integer.parseInt(val[0]);
                     long   bytes  = Long.parseLong(val[1]);
 
-                    ps.setString(1, "mapreduce");
-                    ps.setString(2, "Q1");
-                    ps.setInt(3, 1);
-                    ps.setInt(4, batchId);
-                    ps.setString(5, date);
-                    ps.setNull(6, Types.INTEGER);
-                    ps.setInt(7, status);
-                    ps.setNull(8, Types.VARCHAR);
-                    ps.setInt(9, count);
-                    ps.setNull(10, Types.INTEGER);
-                    ps.setLong(11, bytes);
-                    ps.setNull(12, Types.INTEGER);
-                    ps.setNull(13, Types.DOUBLE);
-                    ps.setLong(14, runtime);
+                    ps.setInt(1, runId);
+                    ps.setInt(2, batchId);
+                    ps.setString(3, "Q1");
+                    ps.setString(4, date);
+                    ps.setInt(5, status);
+                    ps.setInt(6, count);
+                    ps.setLong(7, bytes);
 
                     ps.addBatch();
                     totalInserted++;
@@ -86,31 +139,23 @@ public class ResultLoader {
             batchId, totalBatches, totalInserted);
 
         if (batchId == totalBatches) {
-            printBatchSummary("mapreduce", "Q1", totalBatches, runtime);
-            printQ1Results("mapreduce");
+            printQ1Results("mapreduce", runId);
         }
     }
 
-    public static void loadQ2(int batchId, int totalBatches, long runtime) throws Exception {
+    public static void loadQ2(int runId, int batchId, int totalBatches, long runtime) throws Exception {
 
-        Properties props = new Properties();
-        props.load(new FileInputStream("config/db.properties"));
-        Connection conn = DriverManager.getConnection(
-            props.getProperty("db.url"), props.getProperty("db.user"), props.getProperty("db.password"));
-
+        Connection conn = getConnection();
         Configuration conf = new Configuration();
         FileSystem    fs   = FileSystem.get(conf);
 
-        // Stage-2 two-stage pipeline: read from the final merged output
         String outputDir = "/etl/output/mapreduce/q2/final";
         FileStatus[] parts = fs.listStatus(new Path(outputDir));
 
         PreparedStatement ps = conn.prepareStatement(
-            "INSERT INTO results (" +
-            "pipeline_name, query_name, run_id, batch_id, " +
-            "resource_path, request_count, total_bytes, distinct_hosts, runtime_ms" +
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        );
+            "INSERT INTO query_results " +
+            "(run_id, batch_id, query_name, resource_path, request_count, total_bytes, distinct_hosts) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?)");
 
         int totalInserted = 0;
 
@@ -127,15 +172,13 @@ public class ResultLoader {
                     String[] vals = p2[1].split("_");
                     if (vals.length < 3) continue;
 
-                    ps.setString(1, "mapreduce");
-                    ps.setString(2, "Q2");
-                    ps.setInt(3, 1);
-                    ps.setInt(4, batchId);
-                    ps.setString(5, p2[0]);
-                    ps.setInt(6, Integer.parseInt(vals[0]));
-                    ps.setLong(7, Long.parseLong(vals[1]));
-                    ps.setInt(8, Integer.parseInt(vals[2]));
-                    ps.setLong(9, runtime);
+                    ps.setInt(1, runId);
+                    ps.setInt(2, batchId);
+                    ps.setString(3, "Q2");
+                    ps.setString(4, p2[0]);
+                    ps.setInt(5, Integer.parseInt(vals[0]));
+                    ps.setLong(6, Long.parseLong(vals[1]));
+                    ps.setInt(7, Integer.parseInt(vals[2]));
 
                     ps.addBatch();
                     totalInserted++;
@@ -151,18 +194,13 @@ public class ResultLoader {
             batchId, totalBatches, totalInserted);
 
         if (batchId == totalBatches) {
-            printBatchSummary("mapreduce", "Q2", totalBatches, runtime);
-            printQ2Results("mapreduce");
+            printQ2Results("mapreduce", runId);
         }
     }
 
-    public static void loadQ3(int batchId, int totalBatches, long runtime) throws Exception {
+    public static void loadQ3(int runId, int batchId, int totalBatches, long runtime) throws Exception {
 
-        Properties props = new Properties();
-        props.load(new FileInputStream("config/db.properties"));
-        Connection conn = DriverManager.getConnection(
-            props.getProperty("db.url"), props.getProperty("db.user"), props.getProperty("db.password"));
-
+        Connection conn = getConnection();
         Configuration conf = new Configuration();
         FileSystem    fs   = FileSystem.get(conf);
 
@@ -170,11 +208,10 @@ public class ResultLoader {
         FileStatus[] parts = fs.listStatus(new Path(outputDir));
 
         PreparedStatement ps = conn.prepareStatement(
-            "INSERT INTO results (" +
-            "pipeline_name, query_name, run_id, batch_id, " +
-            "log_date, log_hour, total_requests, request_count, error_rate, distinct_hosts, runtime_ms" +
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        );
+            "INSERT INTO query_results " +
+            "(run_id, batch_id, query_name, log_date, log_hour, " +
+            " error_request_count, total_requests, error_rate, distinct_error_hosts) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
 
         int totalInserted = 0;
 
@@ -191,19 +228,17 @@ public class ResultLoader {
                     String[] kp = p2[0].split("_");
                     if (kp.length < 2) continue;
                     String[] vp = p2[1].split("_");
-                    if (vp.length < 4) continue; // expecting 4 values now
+                    if (vp.length < 4) continue;
 
-                    ps.setString(1, "mapreduce");
-                    ps.setString(2, "Q3");
-                    ps.setInt(3, 1);
-                    ps.setInt(4, batchId);
-                    ps.setString(5, kp[0]);
-                    ps.setInt(6, Integer.parseInt(kp[1]));
-                    ps.setInt(7, Integer.parseInt(vp[0])); // total requests
-                    ps.setInt(8, Integer.parseInt(vp[1])); // error requests (stored in request_count)
-                    ps.setDouble(9, Double.parseDouble(vp[2])); // error rate
-                    ps.setInt(10, Integer.parseInt(vp[3])); // distinct error hosts
-                    ps.setLong(11, runtime);
+                    ps.setInt(1, runId);
+                    ps.setInt(2, batchId);
+                    ps.setString(3, "Q3");
+                    ps.setString(4, kp[0]);
+                    ps.setInt(5, Integer.parseInt(kp[1]));
+                    ps.setInt(6, Integer.parseInt(vp[1]));    // error request count
+                    ps.setInt(7, Integer.parseInt(vp[0]));    // total requests
+                    ps.setDouble(8, Double.parseDouble(vp[2])); // error rate
+                    ps.setInt(9, Integer.parseInt(vp[3]));    // distinct error hosts
 
                     ps.addBatch();
                     totalInserted++;
@@ -219,8 +254,7 @@ public class ResultLoader {
             batchId, totalBatches, totalInserted);
 
         if (batchId == totalBatches) {
-            printBatchSummary("mapreduce", "Q3", totalBatches, runtime);
-            printQ3Results("mapreduce");
+            printQ3Results("mapreduce", runId);
         }
     }
 
@@ -228,13 +262,8 @@ public class ResultLoader {
     // PIG LOADERS
     // ============================================================
 
-    public static void loadPigQ1(int batchId, int totalBatches, long runtime) throws Exception {
-
-        Properties props = new Properties();
-        props.load(new FileInputStream("config/db.properties"));
-        Connection conn = DriverManager.getConnection(
-            props.getProperty("db.url"), props.getProperty("db.user"), props.getProperty("db.password"));
-
+    public static void loadPigQ1(int runId, int batchId, int totalBatches, long runtime) throws Exception {
+        Connection conn = getConnection();
         Configuration conf = new Configuration();
         FileSystem    fs   = FileSystem.get(conf);
 
@@ -242,12 +271,9 @@ public class ResultLoader {
         FileStatus[] parts = fs.listStatus(new Path(outputDir));
 
         PreparedStatement ps = conn.prepareStatement(
-            "INSERT INTO results (" +
-            "pipeline_name, query_name, run_id, batch_id, " +
-            "log_date, log_hour, status_code, resource_path, " +
-            "request_count, total_requests, total_bytes, distinct_hosts, error_rate, runtime_ms" +
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        );
+            "INSERT INTO query_results " +
+            "(run_id, batch_id, query_name, log_date, status_code, request_count, total_bytes) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?)");
 
         int totalInserted = 0;
 
@@ -259,25 +285,18 @@ public class ResultLoader {
             String line;
             while ((line = br.readLine()) != null) {
                 try {
-                    String[] parts2 = line.split("\\t");
-                    if (parts2.length < 2) continue;
-                    String[] key = parts2[0].split("_");
-                    String[] val = parts2[1].split("_");
+                    String[] p2 = line.split("\\t");
+                    if (p2.length < 2) continue;
+                    String[] key = p2[0].split("_");
+                    String[] val = p2[1].split("_");
 
-                    ps.setString(1, "pig");
-                    ps.setString(2, "Q1");
-                    ps.setInt(3, 1);
-                    ps.setInt(4, batchId);
-                    ps.setString(5, key[0]);
-                    ps.setNull(6, Types.INTEGER);
-                    ps.setInt(7, Integer.parseInt(key[1]));
-                    ps.setNull(8, Types.VARCHAR);
-                    ps.setInt(9, Integer.parseInt(val[0]));
-                    ps.setNull(10, Types.INTEGER);
-                    ps.setLong(11, Long.parseLong(val[1]));
-                    ps.setNull(12, Types.INTEGER);
-                    ps.setNull(13, Types.DOUBLE);
-                    ps.setLong(14, runtime);
+                    ps.setInt(1, runId);
+                    ps.setInt(2, batchId);
+                    ps.setString(3, "Q1");
+                    ps.setString(4, key[0]);
+                    ps.setInt(5, Integer.parseInt(key[1]));
+                    ps.setInt(6, Integer.parseInt(val[0]));
+                    ps.setLong(7, Long.parseLong(val[1]));
 
                     ps.addBatch();
                     totalInserted++;
@@ -293,31 +312,22 @@ public class ResultLoader {
             batchId, totalBatches, totalInserted);
 
         if (batchId == totalBatches) {
-            printBatchSummary("pig", "Q1", totalBatches, runtime);
-            printQ1Results("pig");
+            printQ1Results("pig", runId);
         }
     }
 
-    public static void loadPigQ2(int batchId, int totalBatches, long runtime) throws Exception {
-
-        Properties props = new Properties();
-        props.load(new FileInputStream("config/db.properties"));
-        Connection conn = DriverManager.getConnection(
-            props.getProperty("db.url"), props.getProperty("db.user"), props.getProperty("db.password"));
-
+    public static void loadPigQ2(int runId, int batchId, int totalBatches, long runtime) throws Exception {
+        Connection conn = getConnection();
         Configuration conf = new Configuration();
         FileSystem    fs   = FileSystem.get(conf);
 
-        // Stage-2 two-stage pipeline: read from the final merged output
         String outputDir = "/etl/output/pig/q2/final";
         FileStatus[] parts = fs.listStatus(new Path(outputDir));
 
         PreparedStatement ps = conn.prepareStatement(
-            "INSERT INTO results (" +
-            "pipeline_name, query_name, run_id, batch_id, " +
-            "resource_path, request_count, total_bytes, distinct_hosts, runtime_ms" +
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        );
+            "INSERT INTO query_results " +
+            "(run_id, batch_id, query_name, resource_path, request_count, total_bytes, distinct_hosts) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?)");
 
         int totalInserted = 0;
 
@@ -329,20 +339,18 @@ public class ResultLoader {
             String line;
             while ((line = br.readLine()) != null) {
                 try {
-                    String[] p2   = line.trim().split("\\t", 2);
+                    String[] p2 = line.trim().split("\\t", 2);
                     if (p2.length < 2) continue;
                     String[] vals = p2[1].split("_");
                     if (vals.length < 3) continue;
 
-                    ps.setString(1, "pig");
-                    ps.setString(2, "Q2");
-                    ps.setInt(3, 1);
-                    ps.setInt(4, batchId);
-                    ps.setString(5, p2[0]);
-                    ps.setInt(6, Integer.parseInt(vals[0]));
-                    ps.setLong(7, Long.parseLong(vals[1]));
-                    ps.setInt(8, Integer.parseInt(vals[2]));
-                    ps.setLong(9, runtime);
+                    ps.setInt(1, runId);
+                    ps.setInt(2, batchId);
+                    ps.setString(3, "Q2");
+                    ps.setString(4, p2[0]);
+                    ps.setInt(5, Integer.parseInt(vals[0]));
+                    ps.setLong(6, Long.parseLong(vals[1]));
+                    ps.setInt(7, Integer.parseInt(vals[2]));
 
                     ps.addBatch();
                     totalInserted++;
@@ -358,18 +366,12 @@ public class ResultLoader {
             batchId, totalBatches, totalInserted);
 
         if (batchId == totalBatches) {
-            printBatchSummary("pig", "Q2", totalBatches, runtime);
-            printQ2Results("pig");
+            printQ2Results("pig", runId);
         }
     }
 
-    public static void loadPigQ3(int batchId, int totalBatches, long runtime) throws Exception {
-
-        Properties props = new Properties();
-        props.load(new FileInputStream("config/db.properties"));
-        Connection conn = DriverManager.getConnection(
-            props.getProperty("db.url"), props.getProperty("db.user"), props.getProperty("db.password"));
-
+    public static void loadPigQ3(int runId, int batchId, int totalBatches, long runtime) throws Exception {
+        Connection conn = getConnection();
         Configuration conf = new Configuration();
         FileSystem    fs   = FileSystem.get(conf);
 
@@ -377,11 +379,10 @@ public class ResultLoader {
         FileStatus[] parts = fs.listStatus(new Path(outputDir));
 
         PreparedStatement ps = conn.prepareStatement(
-            "INSERT INTO results (" +
-            "pipeline_name, query_name, run_id, batch_id, " +
-            "log_date, log_hour, total_requests, request_count, error_rate, distinct_hosts, runtime_ms" +
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        );
+            "INSERT INTO query_results " +
+            "(run_id, batch_id, query_name, log_date, log_hour, " +
+            " error_request_count, total_requests, error_rate, distinct_error_hosts) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
 
         int totalInserted = 0;
 
@@ -400,17 +401,15 @@ public class ResultLoader {
                     String[] vp = p2[1].split("_");
                     if (vp.length < 4) continue;
 
-                    ps.setString(1, "pig");
-                    ps.setString(2, "Q3");
-                    ps.setInt(3, 1);
-                    ps.setInt(4, batchId);
-                    ps.setString(5, kp[0]);
-                    ps.setInt(6, Integer.parseInt(kp[1]));
-                    ps.setInt(7, Integer.parseInt(vp[0])); // total requests
-                    ps.setInt(8, Integer.parseInt(vp[1])); // error requests
-                    ps.setDouble(9, Double.parseDouble(vp[2])); // error rate
-                    ps.setInt(10, Integer.parseInt(vp[3])); // distinct hosts
-                    ps.setLong(11, runtime);
+                    ps.setInt(1, runId);
+                    ps.setInt(2, batchId);
+                    ps.setString(3, "Q3");
+                    ps.setString(4, kp[0]);
+                    ps.setInt(5, Integer.parseInt(kp[1]));
+                    ps.setLong(6, Long.parseLong(vp[1]));
+                    ps.setLong(7, Long.parseLong(vp[0]));
+                    ps.setDouble(8, Double.parseDouble(vp[2]));
+                    ps.setInt(9, Integer.parseInt(vp[3]));
 
                     ps.addBatch();
                     totalInserted++;
@@ -426,8 +425,7 @@ public class ResultLoader {
             batchId, totalBatches, totalInserted);
 
         if (batchId == totalBatches) {
-            printBatchSummary("pig", "Q3", totalBatches, runtime);
-            printQ3Results("pig");
+            printQ3Results("pig", runId);
         }
     }
 
@@ -435,37 +433,24 @@ public class ResultLoader {
     // MONGO LOADERS
     // ============================================================
 
-    public static void loadMongoQ1(int batchId, int totalBatches, long runtime, Iterable<org.bson.Document> docs) throws Exception {
-        Properties props = new Properties();
-        props.load(new FileInputStream("config/db.properties"));
-        Connection conn = DriverManager.getConnection(
-            props.getProperty("db.url"), props.getProperty("db.user"), props.getProperty("db.password"));
+    public static void loadMongoQ1(int runId, int batchId, int totalBatches, long runtime, Iterable<org.bson.Document> docs) throws Exception {
+        Connection conn = getConnection();
 
         PreparedStatement ps = conn.prepareStatement(
-            "INSERT INTO results (" +
-            "pipeline_name, query_name, run_id, batch_id, " +
-            "log_date, log_hour, status_code, resource_path, " +
-            "request_count, total_requests, total_bytes, distinct_hosts, error_rate, runtime_ms" +
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        );
+            "INSERT INTO query_results " +
+            "(run_id, batch_id, query_name, log_date, status_code, request_count, total_bytes) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?)");
 
         int totalInserted = 0;
         for (org.bson.Document doc : docs) {
             org.bson.Document id = (org.bson.Document) doc.get("_id");
-            ps.setString(1, "mongo");
-            ps.setString(2, "Q1");
-            ps.setInt(3, 1);
-            ps.setInt(4, batchId);
-            ps.setString(5, id.getString("log_date"));
-            ps.setNull(6, Types.INTEGER);
-            ps.setInt(7, ((Number) id.get("status_code")).intValue());
-            ps.setNull(8, Types.VARCHAR);
-            ps.setInt(9, ((Number) doc.get("request_count")).intValue());
-            ps.setNull(10, Types.INTEGER);
-            ps.setLong(11, ((Number) doc.get("total_bytes")).longValue());
-            ps.setNull(12, Types.INTEGER);
-            ps.setNull(13, Types.DOUBLE);
-            ps.setLong(14, runtime);
+            ps.setInt(1, runId);
+            ps.setInt(2, batchId);
+            ps.setString(3, "Q1");
+            ps.setString(4, id.getString("log_date"));
+            ps.setInt(5, ((Number) id.get("status_code")).intValue());
+            ps.setLong(6, ((Number) doc.get("request_count")).longValue());
+            ps.setLong(7, ((Number) doc.get("total_bytes")).longValue());
 
             ps.addBatch();
             totalInserted++;
@@ -478,35 +463,27 @@ public class ResultLoader {
             batchId, totalBatches, totalInserted);
 
         if (batchId == totalBatches) {
-            printBatchSummary("mongo", "Q1", totalBatches, runtime);
-            printQ1Results("mongo");
+            printQ1Results("mongo", runId);
         }
     }
 
-    public static void loadMongoQ2(int batchId, int totalBatches, long runtime, Iterable<org.bson.Document> docs) throws Exception {
-        Properties props = new Properties();
-        props.load(new FileInputStream("config/db.properties"));
-        Connection conn = DriverManager.getConnection(
-            props.getProperty("db.url"), props.getProperty("db.user"), props.getProperty("db.password"));
+    public static void loadMongoQ2(int runId, int batchId, int totalBatches, long runtime, Iterable<org.bson.Document> docs) throws Exception {
+        Connection conn = getConnection();
 
         PreparedStatement ps = conn.prepareStatement(
-            "INSERT INTO results (" +
-            "pipeline_name, query_name, run_id, batch_id, " +
-            "resource_path, request_count, total_bytes, distinct_hosts, runtime_ms" +
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        );
+            "INSERT INTO query_results " +
+            "(run_id, batch_id, query_name, resource_path, request_count, total_bytes, distinct_hosts) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?)");
 
         int totalInserted = 0;
         for (org.bson.Document doc : docs) {
-            ps.setString(1, "mongo");
-            ps.setString(2, "Q2");
-            ps.setInt(3, 1);
-            ps.setInt(4, batchId);
-            ps.setString(5, doc.getString("_id"));
-            ps.setInt(6, ((Number) doc.get("req_count")).intValue());
-            ps.setLong(7, ((Number) doc.get("bytes")).longValue());
-            ps.setInt(8, ((Number) doc.get("distinct_hosts")).intValue());
-            ps.setLong(9, runtime);
+            ps.setInt(1, runId);
+            ps.setInt(2, batchId);
+            ps.setString(3, "Q2");
+            ps.setString(4, doc.getString("_id"));
+            ps.setLong(5, ((Number) doc.get("req_count")).longValue());
+            ps.setLong(6, ((Number) doc.get("bytes")).longValue());
+            ps.setInt(7, ((Number) doc.get("distinct_hosts")).intValue());
 
             ps.addBatch();
             totalInserted++;
@@ -519,39 +496,31 @@ public class ResultLoader {
             batchId, totalBatches, totalInserted);
 
         if (batchId == totalBatches) {
-            printBatchSummary("mongo", "Q2", totalBatches, runtime);
-            printQ2Results("mongo");
+            printQ2Results("mongo", runId);
         }
     }
 
-    public static void loadMongoQ3(int batchId, int totalBatches, long runtime, Iterable<org.bson.Document> docs) throws Exception {
-        Properties props = new Properties();
-        props.load(new FileInputStream("config/db.properties"));
-        Connection conn = DriverManager.getConnection(
-            props.getProperty("db.url"), props.getProperty("db.user"), props.getProperty("db.password"));
+    public static void loadMongoQ3(int runId, int batchId, int totalBatches, long runtime, Iterable<org.bson.Document> docs) throws Exception {
+        Connection conn = getConnection();
 
         PreparedStatement ps = conn.prepareStatement(
-            "INSERT INTO results (" +
-            "pipeline_name, query_name, run_id, batch_id, " +
-            "log_date, log_hour, total_requests, request_count, error_rate, distinct_hosts, runtime_ms" +
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        );
+            "INSERT INTO query_results " +
+            "(run_id, batch_id, query_name, log_date, log_hour, " +
+            " error_request_count, total_requests, error_rate, distinct_error_hosts) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
 
         int totalInserted = 0;
         for (org.bson.Document doc : docs) {
             org.bson.Document id = (org.bson.Document) doc.get("_id");
-            ps.setString(1, "mongo");
-            ps.setString(2, "Q3");
-            ps.setInt(3, 1);
-            ps.setInt(4, batchId);
-            ps.setString(5, id.getString("log_date"));
-            ps.setInt(6, ((Number) id.get("log_hour")).intValue());
-            ps.setInt(7, ((Number) doc.get("total_requests")).intValue());
-            ps.setInt(8, ((Number) doc.get("error_requests")).intValue());
-            double rawRate = ((Number) doc.get("error_rate")).doubleValue();
-            ps.setDouble(9, Math.round(rawRate * 100000.0) / 100000.0);
-            ps.setInt(10, ((Number) doc.get("distinct_hosts")).intValue());
-            ps.setLong(11, runtime);
+            ps.setInt(1, runId);
+            ps.setInt(2, batchId);
+            ps.setString(3, "Q3");
+            ps.setString(4, id.getString("log_date"));
+            ps.setInt(5, ((Number) id.get("log_hour")).intValue());
+            ps.setLong(6, ((Number) doc.get("error_requests")).longValue());
+            ps.setLong(7, ((Number) doc.get("total_requests")).longValue());
+            ps.setDouble(8, ((Number) doc.get("error_rate")).doubleValue());
+            ps.setInt(9, ((Number) doc.get("distinct_hosts")).intValue());
 
             ps.addBatch();
             totalInserted++;
@@ -564,8 +533,7 @@ public class ResultLoader {
             batchId, totalBatches, totalInserted);
 
         if (batchId == totalBatches) {
-            printBatchSummary("mongo", "Q3", totalBatches, runtime);
-            printQ3Results("mongo");
+            printQ3Results("mongo", runId);
         }
     }
 
@@ -574,22 +542,17 @@ public class ResultLoader {
     // ============================================================
 
     /** Q1: date, status_code, request_count, total_bytes */
-    private static void printQ1Results(String pipeline) throws Exception {
-        Properties props = new Properties();
-        props.load(new FileInputStream("config/db.properties"));
-        try (Connection conn = DriverManager.getConnection(
-                props.getProperty("db.url"),
-                props.getProperty("db.user"),
-                props.getProperty("db.password"))) {
+    private static void printQ1Results(String pipeline, int runId) throws Exception {
+        try (Connection conn = getConnection()) {
 
             String sql =
                 "SELECT log_date, status_code, SUM(request_count) AS request_count, SUM(total_bytes) AS total_bytes " +
-                "FROM results WHERE query_name='Q1' AND pipeline_name=? " +
+                "FROM query_results WHERE query_name='Q1' AND run_id=? " +
                 "GROUP BY log_date, status_code " +
                 "ORDER BY log_date, status_code";
 
             PreparedStatement ps = conn.prepareStatement(sql);
-            ps.setString(1, pipeline);
+            ps.setInt(1, runId);
             ResultSet rs = ps.executeQuery();
 
             System.out.println("\n╔══════════════════════════════════════════════════════════════╗");
@@ -614,21 +577,16 @@ public class ResultLoader {
     }
 
     /** Q2: resource_path, request_count, total_bytes, distinct_host_count (Top 20) */
-    private static void printQ2Results(String pipeline) throws Exception {
-        Properties props = new Properties();
-        props.load(new FileInputStream("config/db.properties"));
-        try (Connection conn = DriverManager.getConnection(
-                props.getProperty("db.url"),
-                props.getProperty("db.user"),
-                props.getProperty("db.password"))) {
+    private static void printQ2Results(String pipeline, int runId) throws Exception {
+        try (Connection conn = getConnection()) {
 
             String sql =
                 "SELECT resource_path, request_count, total_bytes, distinct_hosts " +
-                "FROM results WHERE query_name='Q2' AND pipeline_name=? " +
+                "FROM query_results WHERE query_name='Q2' AND run_id=? " +
                 "ORDER BY request_count DESC LIMIT 20";
 
             PreparedStatement ps = conn.prepareStatement(sql);
-            ps.setString(1, pipeline);
+            ps.setInt(1, runId);
             ResultSet rs = ps.executeQuery();
 
             System.out.println("\n╔══════════════════════════════════════════════════════════════════════════════════════╗");
@@ -655,25 +613,20 @@ public class ResultLoader {
     }
 
     /** Q3: log_date, log_hour, total_requests, error_count, error_rate, distinct_error_hosts */
-    private static void printQ3Results(String pipeline) throws Exception {
-        Properties props = new Properties();
-        props.load(new FileInputStream("config/db.properties"));
-        try (Connection conn = DriverManager.getConnection(
-                props.getProperty("db.url"),
-                props.getProperty("db.user"),
-                props.getProperty("db.password"))) {
+    private static void printQ3Results(String pipeline, int runId) throws Exception {
+        try (Connection conn = getConnection()) {
 
             String sql =
                 "SELECT log_date, log_hour, SUM(total_requests) AS total_requests, " +
-                "       SUM(request_count) AS error_requests, " +
+                "       SUM(error_request_count) AS error_requests, " +
                 "       ROUND(AVG(error_rate)::numeric, 5) AS error_rate, " +
-                "       SUM(distinct_hosts) AS distinct_error_hosts " +
-                "FROM results WHERE query_name='Q3' AND pipeline_name=? " +
+                "       SUM(distinct_error_hosts) AS distinct_error_hosts " +
+                "FROM query_results WHERE query_name='Q3' AND run_id=? " +
                 "GROUP BY log_date, log_hour " +
                 "ORDER BY log_date, log_hour";
 
             PreparedStatement ps = conn.prepareStatement(sql);
-            ps.setString(1, pipeline);
+            ps.setInt(1, runId);
             ResultSet rs = ps.executeQuery();
 
             System.out.println("\n╔════════════════════════════════════════════════════════════════════════════════════════════════╗");
@@ -700,23 +653,39 @@ public class ResultLoader {
     }
 
     // ============================================================
-    // BATCH SUMMARY
+    // BATCH SUMMARY — reads from batch_metadata table
     // ============================================================
 
-    private static void printBatchSummary(String pipeline, String query,
-                                           int totalBatches, long totalRuntimeMs) {
-        long totalInputRecords = BatchSplitter.lastTotalLines > 0 
-                                 ? BatchSplitter.lastTotalLines 
-                                 : ((long) totalBatches * BatchSplitter.BATCH_SIZE);
-        System.out.println("\n========================================");
-        System.out.println("  Pipeline      : " + pipeline.toUpperCase());
-        System.out.println("  Query         : " + query);
-        System.out.println("  Total batches : " + totalBatches);
-        System.out.println("  Batch size    : " + BatchSplitter.BATCH_SIZE + " input records");
-        System.out.printf ("  Avg batch size: %.0f input records%n",
-                           (double) totalInputRecords / totalBatches);
-        System.out.printf ("  Total runtime : %.2f sec%n", totalRuntimeMs / 1000.0);
-        System.out.println("========================================\n");
+    public static void printBatchSummary(String pipeline, int runId) throws Exception {
+        try (Connection conn = getConnection()) {
+            String sql =
+                "SELECT batch_id, batch_label, batch_size, average_batch_size, " +
+                "       records_processed, runtime_ms " +
+                "FROM batch_metadata WHERE run_id=? ORDER BY batch_id";
+
+            PreparedStatement ps = conn.prepareStatement(sql);
+            ps.setInt(1, runId);
+            ResultSet rs = ps.executeQuery();
+
+            System.out.println("\n========================================");
+            System.out.println("  Pipeline : " + pipeline.toUpperCase());
+            System.out.println("  Run ID   : " + runId);
+            System.out.println("----------------------------------------");
+
+            long totalRuntime = 0;
+            while (rs.next()) {
+                System.out.printf("  Batch %d [%s]: size=%d, processed=%d, avg=%.0f, runtime=%d ms%n",
+                    rs.getInt("batch_id"),
+                    rs.getString("batch_label"),
+                    rs.getLong("batch_size"),
+                    rs.getLong("records_processed"),
+                    rs.getDouble("average_batch_size"),
+                    rs.getLong("runtime_ms"));
+                totalRuntime += rs.getLong("runtime_ms");
+            }
+            System.out.printf("  Total runtime : %.2f sec%n", totalRuntime / 1000.0);
+            System.out.println("========================================\n");
+        }
     }
 
     // ============================================================

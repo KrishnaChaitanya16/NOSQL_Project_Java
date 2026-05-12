@@ -66,7 +66,7 @@ public class Q2MergeReducer extends Reducer<Text, Text, Text, Text> {
 
                 // Union of hosts across batches — eliminates duplicates
                 if (!hostsCsv.isEmpty()) {
-                    for (String h : hostsCsv.split(",")) {
+                    for (String h : hostsCsv.split("#")) {
                         if (!h.isEmpty()) globalHosts.add(h);
                     }
                 }

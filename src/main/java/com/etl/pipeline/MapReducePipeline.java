@@ -1,7 +1,6 @@
 package com.etl.pipeline;
 
 import com.etl.db.ResultLoader;
-import com.etl.util.BatchSplitter;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -13,19 +12,20 @@ public class MapReducePipeline implements Pipeline {
     // Q1 – Daily request count + total bytes per status code
     // ----------------------------------------------------------------
     @Override
-    public void runQ1() throws Exception {
+    public void runQ1(int runId, List<String[]> batches) throws Exception {
 
         System.out.println("Running MapReduce Q1...");
 
-        List<String> batches = BatchSplitter.split();
         long totalRuntime = 0;
         long totalMalformed = 0;
 
         for (int batchId = 1; batchId <= batches.size(); batchId++) {
-            String inputPath  = batches.get(batchId - 1);
+            String[] batchInfo = batches.get(batchId - 1);
+            String inputPath  = batchInfo[0];
+            String batchLabel = batchInfo[1];
             String outputPath = "/etl/output/mapreduce/q1/batch_" + batchId;
 
-            System.out.println("\n--- MapReduce Q1 Batch " + batchId + "/" + batches.size() + " ---");
+            System.out.println("\n--- MapReduce Q1 Batch " + batchId + "/" + batches.size() + " [" + batchLabel + "] ---");
             System.out.println("  Input : " + inputPath);
             System.out.println("  Output: " + outputPath);
 
@@ -43,8 +43,8 @@ public class MapReducePipeline implements Pipeline {
             pb.redirectErrorStream(true);
             Process p = pb.start();
 
-            // Track the LAST seen counter value per job (Hadoop may print it multiple times)
             long lastMalformed = 0;
+            long recordsProcessed = 0;
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String line;
             while ((line = reader.readLine()) != null) {
@@ -53,6 +53,12 @@ public class MapReducePipeline implements Pipeline {
                     try {
                         String val = line.substring(line.indexOf("MALFORMED_RECORDS=") + 18).trim();
                         lastMalformed = Long.parseLong(val);
+                    } catch (Exception e) {}
+                }
+                if (line.contains("Map input records=")) {
+                    try {
+                        String val = line.substring(line.indexOf("Map input records=") + 18).trim();
+                        recordsProcessed = Long.parseLong(val);
                     } catch (Exception e) {}
                 }
             }
@@ -66,35 +72,40 @@ public class MapReducePipeline implements Pipeline {
             totalRuntime += batchRuntime;
             System.out.println("Batch " + batchId + " runtime: " + batchRuntime + " ms");
 
-            ResultLoader.loadQ1(batchId, batches.size(), totalRuntime);
+            long batchSizeBytes = getHdfsFileSize(inputPath);
+            ResultLoader.saveBatchMeta(runId, batchId, batchLabel, batchSizeBytes, batchSizeBytes, recordsProcessed, batchRuntime);
+            ResultLoader.saveMalformed(runId, batchId, "Q1", lastMalformed);
+
+            ResultLoader.loadQ1(runId, batchId, batches.size(), totalRuntime);
         }
 
         System.out.println("\nMapReduce Q1 completed. Total runtime: " + totalRuntime + " ms");
         System.out.println("==> TOTAL MALFORMED RECORDS FOR Q1: " + totalMalformed);
-        System.out.printf("Total batches: %d  |  Avg batch size: %.0f lines%n",
-            batches.size(), BatchSplitter.lastTotalLines > 0 ? (double) BatchSplitter.lastTotalLines / batches.size() : (double) BatchSplitter.BATCH_SIZE);
+        ResultLoader.printBatchSummary("mapreduce", runId);
     }
 
     // ----------------------------------------------------------------
     // Q2 – Top 20 most-requested resources  (TWO-STAGE)
-    // Stage 1: per-batch aggregation (all resources, with host list)
-    // Stage 2: global merge → true Top-20, exact distinct hosts
     // ----------------------------------------------------------------
     @Override
-    public void runQ2() throws Exception {
+    public void runQ2(int runId, List<String[]> batches) throws Exception {
 
         System.out.println("Running MapReduce Q2 (Two-Stage)...");
 
-        List<String> batches = BatchSplitter.split();
         long totalRuntime = 0;
         long totalMalformed = 0;
 
+        String stage1Dir  = "/etl/output/mapreduce/q2/stage1";
+        runCommand("hdfs", "dfs", "-rm", "-r", stage1Dir);
+
         // ---- Stage 1: one job per batch ----
         for (int batchId = 1; batchId <= batches.size(); batchId++) {
-            String inputPath  = batches.get(batchId - 1);
+            String[] batchInfo = batches.get(batchId - 1);
+            String inputPath  = batchInfo[0];
+            String batchLabel = batchInfo[1];
             String outputPath = "/etl/output/mapreduce/q2/stage1/batch_" + batchId;
 
-            System.out.println("\n--- MapReduce Q2 Stage-1 Batch " + batchId + "/" + batches.size() + " ---");
+            System.out.println("\n--- MapReduce Q2 Stage-1 Batch " + batchId + "/" + batches.size() + " [" + batchLabel + "] ---");
 
             long start = System.currentTimeMillis();
             runCommand("hdfs", "dfs", "-rm", "-r", outputPath);
@@ -109,8 +120,8 @@ public class MapReducePipeline implements Pipeline {
             pb.redirectErrorStream(true);
             Process p = pb.start();
 
-            // Track the LAST seen counter value per job
             long lastMalformed = 0;
+            long recordsProcessed = 0;
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String line;
             while ((line = reader.readLine()) != null) {
@@ -121,6 +132,12 @@ public class MapReducePipeline implements Pipeline {
                         lastMalformed = Long.parseLong(val);
                     } catch (Exception e) {}
                 }
+                if (line.contains("Map input records=")) {
+                    try {
+                        String val = line.substring(line.indexOf("Map input records=") + 18).trim();
+                        recordsProcessed = Long.parseLong(val);
+                    } catch (Exception e) {}
+                }
             }
             totalMalformed += lastMalformed;
 
@@ -128,11 +145,16 @@ public class MapReducePipeline implements Pipeline {
             System.out.println("MapReduce Q2 Stage-1 Batch " + batchId + " Exit Code: " + exitCode);
             if (exitCode != 0) throw new RuntimeException("Q2 Stage-1 Batch " + batchId + " failed!");
 
-            totalRuntime += System.currentTimeMillis() - start;
+            long batchRuntime = System.currentTimeMillis() - start;
+            totalRuntime += batchRuntime;
+
+            long batchSizeBytes = getHdfsFileSize(inputPath);
+            ResultLoader.saveBatchMeta(runId, batchId, batchLabel, batchSizeBytes, batchSizeBytes, recordsProcessed, batchRuntime);
+            ResultLoader.saveMalformed(runId, batchId, "Q2", lastMalformed);
         }
 
         // ---- Stage 2: global merge across all batch outputs ----
-        String stage1Dir  = "/etl/output/mapreduce/q2/stage1";
+        // stage1Dir already defined above
         String finalOutput = "/etl/output/mapreduce/q2/final";
 
         System.out.println("\n--- MapReduce Q2 Stage-2 Global Merge ---");
@@ -143,7 +165,7 @@ public class MapReducePipeline implements Pipeline {
             "hadoop", "jar",
             "scripts/mapreduce/q2_merge.jar",
             "Q2MergeDriver",
-            stage1Dir + "/*",      // glob: reads all batch_* sub-dirs
+            stage1Dir + "/*",
             finalOutput
         );
         pb2.redirectErrorStream(true);
@@ -157,30 +179,32 @@ public class MapReducePipeline implements Pipeline {
 
         totalRuntime += System.currentTimeMillis() - mergeStart;
 
-        // Load final merged result into DB with batch_id = total batches processed
-        ResultLoader.loadQ2(batches.size(), batches.size(), totalRuntime);
+        // Load final merged result into DB
+        ResultLoader.loadQ2(runId, batches.size(), batches.size(), totalRuntime);
 
         System.out.println("\nMapReduce Q2 completed (Two-Stage). Total runtime: " + totalRuntime + " ms");
         System.out.println("==> TOTAL MALFORMED RECORDS FOR Q2: " + totalMalformed);
+        ResultLoader.printBatchSummary("mapreduce", runId);
     }
 
     // ----------------------------------------------------------------
     // Q3 – Error rate per hour
     // ----------------------------------------------------------------
     @Override
-    public void runQ3() throws Exception {
+    public void runQ3(int runId, List<String[]> batches) throws Exception {
 
         System.out.println("Running MapReduce Q3...");
 
-        List<String> batches = BatchSplitter.split();
         long totalRuntime = 0;
         long totalMalformed = 0;
 
         for (int batchId = 1; batchId <= batches.size(); batchId++) {
-            String inputPath  = batches.get(batchId - 1);
+            String[] batchInfo = batches.get(batchId - 1);
+            String inputPath  = batchInfo[0];
+            String batchLabel = batchInfo[1];
             String outputPath = "/etl/output/mapreduce/q3/batch_" + batchId;
 
-            System.out.println("\n--- MapReduce Q3 Batch " + batchId + "/" + batches.size() + " ---");
+            System.out.println("\n--- MapReduce Q3 Batch " + batchId + "/" + batches.size() + " [" + batchLabel + "] ---");
 
             long start = System.currentTimeMillis();
 
@@ -196,8 +220,8 @@ public class MapReducePipeline implements Pipeline {
             pb.redirectErrorStream(true);
             Process p = pb.start();
 
-            // Track the LAST seen counter value per job
             long lastMalformed = 0;
+            long recordsProcessed = 0;
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String line;
             while ((line = reader.readLine()) != null) {
@@ -206,6 +230,12 @@ public class MapReducePipeline implements Pipeline {
                     try {
                         String val = line.substring(line.indexOf("MALFORMED_RECORDS=") + 18).trim();
                         lastMalformed = Long.parseLong(val);
+                    } catch (Exception e) {}
+                }
+                if (line.contains("Map input records=")) {
+                    try {
+                        String val = line.substring(line.indexOf("Map input records=") + 18).trim();
+                        recordsProcessed = Long.parseLong(val);
                     } catch (Exception e) {}
                 }
             }
@@ -218,14 +248,30 @@ public class MapReducePipeline implements Pipeline {
             long batchRuntime = System.currentTimeMillis() - start;
             totalRuntime += batchRuntime;
 
-            ResultLoader.loadQ3(batchId, batches.size(), totalRuntime);
+            long batchSizeBytes = getHdfsFileSize(inputPath);
+            ResultLoader.saveBatchMeta(runId, batchId, batchLabel, batchSizeBytes, batchSizeBytes, recordsProcessed, batchRuntime);
+            ResultLoader.saveMalformed(runId, batchId, "Q3", lastMalformed);
+
+            ResultLoader.loadQ3(runId, batchId, batches.size(), totalRuntime);
         }
 
         System.out.println("\nMapReduce Q3 completed. Total runtime: " + totalRuntime + " ms");
         System.out.println("==> TOTAL MALFORMED RECORDS FOR Q3: " + totalMalformed);
+        ResultLoader.printBatchSummary("mapreduce", runId);
     }
 
-    // -------- Helper: fire-and-forget HDFS command --------
+    // -------- Helpers --------
+
+    private long getHdfsFileSize(String path) {
+        try {
+            org.apache.hadoop.conf.Configuration conf = new org.apache.hadoop.conf.Configuration();
+            org.apache.hadoop.fs.FileSystem fs = org.apache.hadoop.fs.FileSystem.get(conf);
+            return fs.getFileStatus(new org.apache.hadoop.fs.Path(path)).getLen();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     private void runCommand(String... cmd) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);

@@ -41,7 +41,7 @@ public class Q2Reducer extends Reducer<Text, Text, Text, Text> {
         }
 
         // Emit: count _ bytes _ comma-separated-hosts
-        String hostList = String.join(",", uniqueHosts);
+        String hostList = String.join("#", uniqueHosts);
         context.write(
             key,
             new Text(requestCount + "_" + totalBytes + "_" + hostList)
