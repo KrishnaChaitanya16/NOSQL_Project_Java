@@ -46,23 +46,39 @@ public class PigPipeline implements Pipeline {
             pb.redirectErrorStream(true);
             Process p = pb.start();
 
+            long lastMalformed = 0;
+            long recordsProcessed = 0;
+
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String line;
             while ((line = reader.readLine()) != null) {
                 System.out.println(line);
-                // Pig outputs: Successfully stored 123 records in: "/etl/output/pig/q1/batch_1_malformed"
+                // Parse malformed count: "Successfully stored 1 records ... _malformed"
                 if (line.contains("Successfully stored") && line.contains("_malformed")) {
                     try {
                         String[] parts = line.split("\\s+");
                         for (int i = 0; i < parts.length; i++) {
                             if (parts[i].equals("stored") && i + 1 < parts.length) {
-                                totalMalformed += Long.parseLong(parts[i + 1]);
+                                lastMalformed = Long.parseLong(parts[i + 1]);
+                                break;
+                            }
+                        }
+                    } catch (Exception e) {}
+                }
+                // Parse records processed: "Successfully read 1891715 records"
+                if (line.contains("Successfully read") && line.contains("records")) {
+                    try {
+                        String[] parts = line.split("\\s+");
+                        for (int i = 0; i < parts.length; i++) {
+                            if (parts[i].equals("read") && i + 1 < parts.length) {
+                                recordsProcessed = Long.parseLong(parts[i + 1]);
                                 break;
                             }
                         }
                     } catch (Exception e) {}
                 }
             }
+            totalMalformed += lastMalformed;
 
             int exitCode = p.waitFor();
             System.out.println("Pig Q1 Batch " + batchId + " Exit Code: " + exitCode);
@@ -72,12 +88,18 @@ public class PigPipeline implements Pipeline {
             totalRuntime += batchRuntime;
             System.out.println("Batch " + batchId + " runtime: " + batchRuntime + " ms");
 
+            // -------- Save batch metadata & malformed count --------
+            long batchSizeBytes = getHdfsFileSize(inputPath);
+            ResultLoader.saveBatchMeta(runId, batchId, batchLabel, batchSizeBytes, batchSizeBytes, recordsProcessed, batchRuntime);
+            ResultLoader.saveMalformed(runId, batchId, "Q1", lastMalformed);
+
             // -------- Load this batch's results into DB --------
             ResultLoader.loadPigQ1(runId, batchId, batches.size(), totalRuntime);
         }
 
         System.out.println("\nPig Q1 completed. Total runtime: " + totalRuntime + " ms");
         System.out.println("==> TOTAL MALFORMED RECORDS FOR Q1: " + totalMalformed);
+        ResultLoader.printBatchSummary("pig", runId);
     }
 
     // ----------------------------------------------------------------
@@ -118,7 +140,10 @@ public class PigPipeline implements Pipeline {
             );
             pb.redirectErrorStream(true);
             Process p = pb.start();
-            
+
+            long lastMalformed = 0;
+            long recordsProcessed = 0;
+
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String line;
             while ((line = reader.readLine()) != null) {
@@ -128,19 +153,37 @@ public class PigPipeline implements Pipeline {
                         String[] parts = line.split("\\s+");
                         for (int i = 0; i < parts.length; i++) {
                             if (parts[i].equals("stored") && i + 1 < parts.length) {
-                                totalMalformed += Long.parseLong(parts[i + 1]);
+                                lastMalformed = Long.parseLong(parts[i + 1]);
+                                break;
+                            }
+                        }
+                    } catch (Exception e) {}
+                }
+                if (line.contains("Successfully read") && line.contains("records")) {
+                    try {
+                        String[] parts = line.split("\\s+");
+                        for (int i = 0; i < parts.length; i++) {
+                            if (parts[i].equals("read") && i + 1 < parts.length) {
+                                recordsProcessed = Long.parseLong(parts[i + 1]);
                                 break;
                             }
                         }
                     } catch (Exception e) {}
                 }
             }
+            totalMalformed += lastMalformed;
 
             int exitCode = p.waitFor();
             System.out.println("Pig Q2 Stage-1 Batch " + batchId + " Exit Code: " + exitCode);
             if (exitCode != 0) throw new RuntimeException("Pig Q2 Stage-1 Batch " + batchId + " failed!");
 
-            totalRuntime += System.currentTimeMillis() - start;
+            long batchRuntime = System.currentTimeMillis() - start;
+            totalRuntime += batchRuntime;
+
+            // -------- Save batch metadata & malformed count --------
+            long batchSizeBytes = getHdfsFileSize(inputPath);
+            ResultLoader.saveBatchMeta(runId, batchId, batchLabel, batchSizeBytes, batchSizeBytes, recordsProcessed, batchRuntime);
+            ResultLoader.saveMalformed(runId, batchId, "Q2", lastMalformed);
         }
 
         // ---- Stage 2: global merge ----
@@ -172,6 +215,7 @@ public class PigPipeline implements Pipeline {
 
         System.out.println("\nPig Q2 completed (Two-Stage). Total runtime: " + totalRuntime + " ms");
         System.out.println("==> TOTAL MALFORMED RECORDS FOR Q2: " + totalMalformed);
+        ResultLoader.printBatchSummary("pig", runId);
     }
 
     // ----------------------------------------------------------------
@@ -208,6 +252,9 @@ public class PigPipeline implements Pipeline {
             pb.redirectErrorStream(true);
             Process p = pb.start();
 
+            long lastMalformed = 0;
+            long recordsProcessed = 0;
+
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String line;
             while ((line = reader.readLine()) != null) {
@@ -217,13 +264,25 @@ public class PigPipeline implements Pipeline {
                         String[] parts = line.split("\\s+");
                         for (int i = 0; i < parts.length; i++) {
                             if (parts[i].equals("stored") && i + 1 < parts.length) {
-                                totalMalformed += Long.parseLong(parts[i + 1]);
+                                lastMalformed = Long.parseLong(parts[i + 1]);
+                                break;
+                            }
+                        }
+                    } catch (Exception e) {}
+                }
+                if (line.contains("Successfully read") && line.contains("records")) {
+                    try {
+                        String[] parts = line.split("\\s+");
+                        for (int i = 0; i < parts.length; i++) {
+                            if (parts[i].equals("read") && i + 1 < parts.length) {
+                                recordsProcessed = Long.parseLong(parts[i + 1]);
                                 break;
                             }
                         }
                     } catch (Exception e) {}
                 }
             }
+            totalMalformed += lastMalformed;
 
             int exitCode = p.waitFor();
             System.out.println("Pig Q3 Batch " + batchId + " Exit Code: " + exitCode);
@@ -232,14 +291,31 @@ public class PigPipeline implements Pipeline {
             long batchRuntime = System.currentTimeMillis() - start;
             totalRuntime += batchRuntime;
 
+            // -------- Save batch metadata & malformed count --------
+            long batchSizeBytes = getHdfsFileSize(inputPath);
+            ResultLoader.saveBatchMeta(runId, batchId, batchLabel, batchSizeBytes, batchSizeBytes, recordsProcessed, batchRuntime);
+            ResultLoader.saveMalformed(runId, batchId, "Q3", lastMalformed);
+
             ResultLoader.loadPigQ3(runId, batchId, batches.size(), totalRuntime);
         }
 
         System.out.println("\nPig Q3 completed. Total runtime: " + totalRuntime + " ms");
         System.out.println("==> TOTAL MALFORMED RECORDS FOR Q3: " + totalMalformed);
+        ResultLoader.printBatchSummary("pig", runId);
     }
 
-    // -------- Helper: fire-and-forget HDFS command --------
+    // -------- Helpers --------
+
+    private long getHdfsFileSize(String path) {
+        try {
+            org.apache.hadoop.conf.Configuration conf = new org.apache.hadoop.conf.Configuration();
+            org.apache.hadoop.fs.FileSystem fs = org.apache.hadoop.fs.FileSystem.get(conf);
+            return fs.getFileStatus(new org.apache.hadoop.fs.Path(path)).getLen();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     private void runCommand(String... cmd) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
