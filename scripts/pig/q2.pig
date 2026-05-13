@@ -6,20 +6,34 @@
 raw = LOAD '$INPUT' USING TextLoader() AS (line:chararray);
 
 -- Parse using lenient outer CLF regex — protocol inside request is optional
-parsed = FOREACH raw GENERATE
+parsed_raw = FOREACH raw GENERATE
     FLATTEN(
         REGEX_EXTRACT_ALL(
             line,
-            '^(\\S+) \\S+ \\S+ \\[([^\\]]+)\\] \\"(\\S+) (\\S+)(?:\\s+\\S+)?\\" (\\d{3}) (\\S+)$'
+            '^(\\S+)\\s+\\S+\\s+\\S+\\s+\\[([^\\]]+)\\]\\s+\\"(.*)\\"\\s+(\\d{3})\\s+(\\S+)$'
         )
     ) AS (
         host:chararray,
         log_time:chararray,
-        method:chararray,
-        path:chararray,
+        request:chararray,
         status:chararray,
         bytes:chararray
     );
+
+parsed = FOREACH parsed_raw GENERATE
+    host,
+    log_time,
+    FLATTEN(
+        REGEX_EXTRACT_ALL(
+            request,
+            '^(\\S+)\\s+(\\S+)(?:\\s+\\S+)?$'
+        )
+    ) AS (
+        method:chararray,
+        path:chararray
+    ),
+    status,
+    bytes;
 
 -- Malformed = line could not be parsed by the CLF regex at all
 SPLIT parsed INTO
@@ -32,7 +46,13 @@ cleaned = FILTER filtered BY
     (method == 'GET' OR method == 'POST' OR method == 'HEAD')
     AND STARTSWITH(path, '/');
 
-with_bytes = FOREACH cleaned GENERATE
+-- Normalize path: trim and remove non-printable characters (matching MapReduce Java logic)
+normalized = FOREACH cleaned GENERATE
+    TRIM(REPLACE(path, '[^\\x20-\\x7E]', '')) AS path,
+    host,
+    bytes;
+
+with_bytes = FOREACH normalized GENERATE
     path,
     host,
     (bytes == '-' ? 0L : (long)bytes) AS byte_val;

@@ -10,7 +10,7 @@ parsed = FOREACH raw GENERATE
     FLATTEN(
         REGEX_EXTRACT_ALL(
             line,
-            '^(\\S+) \\S+ \\S+ \\[(\\S+):(\\d{2}):\\d{2}:\\d{2} \\S+\\] \\".*\\" (\\d{3}) \\S+$'
+            '^(\\S+)\\s+\\S+\\s+\\S+\\s+\\[(\\S+):(\\d{2}):\\d{2}:\\d{2}\\s+\\S+\\]\\s+\\".*\\"\\s+(\\d{3})\\s+\\S+$'
         )
     ) AS (
         host:chararray,
