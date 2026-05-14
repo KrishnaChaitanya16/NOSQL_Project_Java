@@ -1,5 +1,5 @@
 data/raw/*
-data/
+data/*
 *.class
 *.jar
 *.log
