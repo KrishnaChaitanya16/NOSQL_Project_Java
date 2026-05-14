@@ -430,9 +430,185 @@ public class ResultLoader {
     }
 
     // ============================================================
+    // HIVE LOADERS
+    // ============================================================
+
+    public static int loadHiveQ1(int runId, int batchId, int totalBatches, long runtime) throws Exception {
+        Connection conn = getConnection();
+        Configuration conf = new Configuration();
+        FileSystem    fs   = FileSystem.get(conf);
+
+        String outputDir = "/etl/output/hive/q1/batch_" + batchId;
+        FileStatus[] parts = fs.listStatus(new Path(outputDir));
+
+        PreparedStatement ps = conn.prepareStatement(
+            "INSERT INTO query_results " +
+            "(run_id, batch_id, query_name, log_date, status_code, request_count, total_bytes) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?)");
+
+        int totalInserted = 0;
+
+        for (FileStatus part : parts) {
+            String name = part.getPath().getName();
+            if (name.startsWith("_") || name.startsWith(".")) continue;
+
+            BufferedReader br = new BufferedReader(new InputStreamReader(fs.open(part.getPath())));
+            String line;
+            while ((line = br.readLine()) != null) {
+                try {
+                    String[] p2 = line.split("\\t");
+                    if (p2.length < 2) continue;
+                    
+                    String[] key = p2[0].split("_");
+                    String[] val = p2[1].split("_");
+
+                    ps.setInt(1, runId);
+                    ps.setInt(2, batchId);
+                    ps.setString(3, "Q1");
+                    ps.setString(4, key[0]);
+                    ps.setInt(5, Integer.parseInt(key[1]));
+                    ps.setLong(6, Long.parseLong(val[0]));
+                    ps.setLong(7, Long.parseLong(val[1]));
+
+                    ps.addBatch();
+                    totalInserted++;
+                } catch (Exception e) { /* skip bad lines */ }
+            }
+            br.close();
+        }
+
+        ps.executeBatch();
+        fs.close(); ps.close(); conn.close();
+
+        System.out.printf("Hive Q1 Batch %d/%d → %d rows inserted%n",
+            batchId, totalBatches, totalInserted);
+
+        if (batchId == totalBatches) {
+            printQ1Results("hive", runId);
+        }
+        return totalInserted;
+    }
+
+    public static int loadHiveQ2(int runId, int batchId, int totalBatches, long runtime) throws Exception {
+        Connection conn = getConnection();
+        Configuration conf = new Configuration();
+        FileSystem    fs   = FileSystem.get(conf);
+
+        String outputDir = "/etl/output/hive/q2/final";
+        FileStatus[] parts = fs.listStatus(new Path(outputDir));
+
+        PreparedStatement ps = conn.prepareStatement(
+            "INSERT INTO query_results " +
+            "(run_id, batch_id, query_name, resource_path, request_count, total_bytes, distinct_hosts) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?)");
+
+        int totalInserted = 0;
+
+        for (FileStatus part : parts) {
+            String name = part.getPath().getName();
+            if (name.startsWith("_") || name.startsWith(".")) continue;
+
+            BufferedReader br = new BufferedReader(new InputStreamReader(fs.open(part.getPath())));
+            String line;
+            while ((line = br.readLine()) != null) {
+                try {
+                    String[] p2 = line.trim().split("\\t", 2);
+                    if (p2.length < 2) continue;
+                    String[] vals = p2[1].split("_");
+                    if (vals.length < 3) continue;
+
+                    ps.setInt(1, runId);
+                    ps.setInt(2, batchId);
+                    ps.setString(3, "Q2");
+                    ps.setString(4, p2[0]);
+                    ps.setLong(5, Long.parseLong(vals[0]));
+                    ps.setLong(6, Long.parseLong(vals[1]));
+                    ps.setInt(7, Integer.parseInt(vals[2]));
+
+                    ps.addBatch();
+                    totalInserted++;
+                } catch (Exception e) { /* skip bad lines */ }
+            }
+            br.close();
+        }
+
+        ps.executeBatch();
+        fs.close(); ps.close(); conn.close();
+
+        System.out.printf("Hive Q2 → %d rows inserted%n", totalInserted);
+
+        if (batchId == totalBatches) {
+            printQ2Results("hive", runId);
+        }
+        return totalInserted;
+    }
+
+    public static int loadHiveQ3(int runId, int batchId, int totalBatches, long runtime) throws Exception {
+        Connection conn = getConnection();
+        Configuration conf = new Configuration();
+        FileSystem    fs   = FileSystem.get(conf);
+
+        String outputDir = "/etl/output/hive/q3/batch_" + batchId;
+        FileStatus[] parts = fs.listStatus(new Path(outputDir));
+
+        PreparedStatement ps = conn.prepareStatement(
+            "INSERT INTO query_results " +
+            "(run_id, batch_id, query_name, log_date, log_hour, " +
+            " error_request_count, total_requests, error_rate, distinct_error_hosts) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+
+        int totalInserted = 0;
+
+        for (FileStatus part : parts) {
+            String name = part.getPath().getName();
+            if (name.startsWith("_") || name.startsWith(".")) continue;
+
+            BufferedReader br = new BufferedReader(new InputStreamReader(fs.open(part.getPath())));
+            String line;
+            while ((line = br.readLine()) != null) {
+                try {
+                    String[] p2 = line.trim().split("\\t", 2);
+                    if (p2.length < 2) continue;
+                    String[] kp = p2[0].split("_");
+                    if (kp.length < 2) continue;
+                    String[] vp = p2[1].split("_");
+                    if (vp.length < 4) continue;
+
+                    ps.setInt(1, runId);
+                    ps.setInt(2, batchId);
+                    ps.setString(3, "Q3");
+                    ps.setString(4, kp[0]);
+                    ps.setInt(5, Integer.parseInt(kp[1]));
+                    ps.setLong(6, Long.parseLong(vp[1]));
+                    ps.setLong(7, Long.parseLong(vp[0]));
+                    ps.setDouble(8, Double.parseDouble(vp[2]));
+                    ps.setInt(9, Integer.parseInt(vp[3]));
+
+                    ps.addBatch();
+                    totalInserted++;
+                } catch (Exception e) { /* skip bad lines */ }
+            }
+            br.close();
+        }
+
+        ps.executeBatch();
+        fs.close(); ps.close(); conn.close();
+
+        System.out.printf("Hive Q3 Batch %d/%d → %d rows inserted%n",
+            batchId, totalBatches, totalInserted);
+
+        if (batchId == totalBatches) {
+            printQ3Results("hive", runId);
+        }
+        return totalInserted;
+    }
+
+
+    // ============================================================
     // MONGO LOADERS
     // ============================================================
 
+    /*
     public static void loadMongoQ1(int runId, int batchId, int totalBatches, long runtime, Iterable<org.bson.Document> docs) throws Exception {
         Connection conn = getConnection();
 
@@ -536,6 +712,7 @@ public class ResultLoader {
             printQ3Results("mongo", runId);
         }
     }
+    */
 
     // ============================================================
     // RESULT PRINTERS  –  prints exactly the columns the assignment requires

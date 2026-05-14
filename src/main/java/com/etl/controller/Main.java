@@ -2,7 +2,8 @@ package com.etl.controller;
 
 import com.etl.db.ResultLoader;
 import com.etl.pipeline.MapReducePipeline;
-import com.etl.pipeline.MongoPipeline;
+// import com.etl.pipeline.MongoPipeline;
+import com.etl.pipeline.HivePipeline;
 import com.etl.pipeline.PigPipeline;
 import com.etl.pipeline.Pipeline;
 
@@ -24,7 +25,7 @@ public class Main {
         System.out.println("  1. MapReduce");
         System.out.println("  2. Pig");
         System.out.println("  3. MongoDB");
-        System.out.println("  4. Hive (Under Construction - Phase 4)");
+        System.out.println("  4. Hive");
         System.out.print("Enter choice (1, 2, 3, or 4): ");
         String engineChoice = scanner.nextLine().trim();
 
@@ -37,11 +38,13 @@ public class Main {
             pipeline = new PigPipeline();
             pipelineName = "pig";
         } else if (engineChoice.equals("3") || engineChoice.equalsIgnoreCase("mongodb")) {
-            pipeline = new MongoPipeline();
-            pipelineName = "mongo";
-        } else if (engineChoice.equals("4") || engineChoice.equalsIgnoreCase("hive")) {
-            System.out.println("Hive pipeline is not yet implemented (Phase 4). Exiting.");
+            System.out.println("Mongo pipeline is temporarily disabled to allow compilation without Mongo driver. Exiting.");
             System.exit(0);
+            // pipeline = new MongoPipeline();
+            // pipelineName = "mongo";
+        } else if (engineChoice.equals("4") || engineChoice.equalsIgnoreCase("hive")) {
+            pipeline = new HivePipeline();
+            pipelineName = "hive";
         } else {
             System.out.println("Invalid engine selected. Exiting.");
             System.exit(1);
