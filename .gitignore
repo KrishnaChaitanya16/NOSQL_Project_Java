@@ -1,5 +1,8 @@
 data/raw/*
 data/*
+# Ignore NASA access logs
+data/NASA_access_log_Aug95/
+data/NASA_access_log_Jul95/
 *.class
 *.jar
 *.log
